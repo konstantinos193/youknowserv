@@ -2465,3 +2465,18 @@ app.get('/btc-price', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch BTC price' });
   }
 }); 
+
+// Add CORS headers to every response
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, Accept, Accept-Language, Origin, Referer');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  
+  next();
+});
