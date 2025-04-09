@@ -1,4 +1,3 @@
-// Suppress deprecation warnings
 process.noDeprecation = true;
 
 import express from 'express';
@@ -2510,7 +2509,8 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
             console.log(`Using cached PnL for holder ${holder.user}`);
             return {
               ...holder,
-              pnl: cachedHolder.data.pnl
+              pnl: cachedHolder.data.pnl,
+              isTrustedDev: TRUSTED_DEVELOPERS.includes(holder.user)
             };
           }
 
@@ -2521,7 +2521,11 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
 
           if (!activityResponse?.data) {
             console.log(`No activity data for holder ${holder.user}`);
-            return { ...holder, pnl: 0 };
+            return { 
+              ...holder, 
+              pnl: 0,
+              isTrustedDev: TRUSTED_DEVELOPERS.includes(holder.user)
+            };
           }
 
           // Filter trades for this token
@@ -2572,11 +2576,16 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
 
           return {
             ...holder,
-            pnl: pnlUSD
+            pnl: pnlUSD,
+            isTrustedDev: TRUSTED_DEVELOPERS.includes(holder.user)
           };
         } catch (error) {
           console.error(`Error processing holder ${holder.user}:`, error);
-          return { ...holder, pnl: 0 };
+          return { 
+            ...holder, 
+            pnl: 0,
+            isTrustedDev: TRUSTED_DEVELOPERS.includes(holder.user)
+          };
         }
       })
     );
