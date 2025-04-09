@@ -1303,8 +1303,8 @@ app.get('/api/batch-holders', async (req, res) => {
     const holdersPromises = parsedTokenIds.map(async (tokenId) => {
       try {
         const cleanTokenId = tokenId.trim();
-        // Using the correct endpoint: /owners
-        const url = `https://api.odin.fun/v1/token/${cleanTokenId}/owners?page=1&limit=100`;
+        // Using the correct endpoint with a large limit to get all holders
+        const url = `https://api.odin.fun/v1/token/${cleanTokenId}/owners?page=1&limit=99999`;
         console.log('Fetching from URL:', url);
 
         const response = await fetch(url, {
@@ -1324,27 +1324,33 @@ app.get('/api/batch-holders', async (req, res) => {
         }
 
         // Calculate total supply for percentage calculation
-        const totalSupply = data.data.reduce((sum, holder) => sum + holder.balance, 0);
+        const totalSupply = data.data.reduce((sum, holder) => sum + Number(holder.balance), 0);
 
         const processedHolders = data.data
-          .filter(holder => holder.balance > 0)
+          .filter(holder => Number(holder.balance) > 0)
           .map(holder => ({
             user: holder.user,
             user_username: holder.user_username || holder.user.slice(0, 8),
-            balance: holder.balance / 100000000, // Convert to BTC
-            percentage: (holder.balance / totalSupply) * 100 // Calculate percentage
+            balance: Number(holder.balance) / 1e11, // Convert to proper units
+            percentage: (Number(holder.balance) / totalSupply) * 100 // Calculate percentage
           }))
-          .sort((a, b) => b.balance - a.balance)
-          .slice(0, 5); // Get top 5 holders
+          .sort((a, b) => Number(b.balance) - Number(a.balance));
 
         return {
           tokenId: cleanTokenId,
-          holders: processedHolders
+          holders: processedHolders,
+          totalHolders: processedHolders.length,
+          activeHolders: processedHolders.filter(h => Number(h.balance) > 0).length
         };
 
       } catch (error) {
         console.error(`Error processing token ${cleanTokenId}:`, error);
-        return { tokenId: cleanTokenId, holders: [] };
+        return { 
+          tokenId: cleanTokenId, 
+          holders: [],
+          totalHolders: 0,
+          activeHolders: 0
+        };
       }
     });
 
@@ -1354,7 +1360,9 @@ app.get('/api/batch-holders', async (req, res) => {
     results.forEach(result => {
       if (result && result.tokenId) {
         holders[result.tokenId] = {
-          holders: result.holders
+          holders: result.holders,
+          totalHolders: result.totalHolders,
+          activeHolders: result.activeHolders
         };
       }
     });
