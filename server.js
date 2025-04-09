@@ -8,6 +8,8 @@ import { dirname } from 'path';
 import fetch from 'node-fetch';
 import { readData, writeData, deleteData } from './localStorage.js';
 import { cacheData, getCachedData, deleteCachedData } from './cache.js';
+import fs from 'fs/promises';
+import path from 'path';
 
 // Initialize environment variables
 dotenv.config();
@@ -1736,14 +1738,27 @@ app.get('/api/whale-activity/:tokenId', async (req, res) => {
 // Add this endpoint for all tokens
 app.get('/api/all-tokens', async (req, res) => {
   try {
-    const { page = '1', limit = '100' } = req.query;
-    const cacheKey = `all_tokens_${page}_${limit}`;
-    
-    // Check cache first with very short duration for frequently accessed pages
-    const cachedData = await getCachedData(cacheKey, 10000);
-
-    if (cachedData) {
-      return res.json(cachedData);
+    // Try to read from cache file first
+    try {
+      const fileContent = await fs.readFile(TOKENS_CACHE_FILE, 'utf-8');
+      const cacheData = JSON.parse(fileContent);
+      
+      // If cache is fresh enough (less than 1 minute old), use it
+      if (Date.now() - cacheData.lastUpdated < 60000) {
+        console.log('Serving tokens from cache');
+        return res.json({
+          tokenIds: cacheData.tokenIds,
+          data: cacheData.data,
+          pagination: {
+            currentPage: 1,
+            totalTokens: cacheData.tokenIds.length,
+            hasMore: false
+          }
+        });
+      }
+    } catch (err) {
+      // Cache file doesn't exist or is invalid, will fetch fresh data
+      console.log('Cache miss or invalid, fetching fresh data');
     }
 
     // Fetch all tokens with high limit to get everything
@@ -1751,69 +1766,59 @@ app.get('/api/all-tokens', async (req, res) => {
       headers: {
         ...API_HEADERS,
         'User-Agent': getRandomUserAgent(),
-      },
-      timeout: 10000 // 10 second timeout
+      }
     });
-    
+
     if (!response.ok) {
       throw new Error(`Failed to fetch tokens: ${response.status}`);
     }
-    
+
     const data = await response.json();
-    
-    if (!data || !data.data) {
-      throw new Error('Invalid response format from Odin API');
-    }
 
-    // Process all tokens
-    const processedTokens = data.data.map(token => ({
-      id: token.id,
-      name: token.name,
-      ticker: token.ticker,
-      creator: token.creator,
-      created_time: token.created_time,
-      price: token.price || 0,
-      marketcap: token.marketcap || '0',
-      total_supply: token.total_supply || '0',
-      holder_count: token.holder_count || 0,
-      volume: token.volume || 0,
-      basicMetrics: {
-        volume24h: token.volume || 0,
-        price_change_24h: token.price_change_24h || 0,
-        marketcap_change_24h: token.marketcap_change_24h || 0
-      }
-    }));
+    // Update cache in background
+    fs.writeFile(
+      TOKENS_CACHE_FILE,
+      JSON.stringify({
+        tokenIds: data.tokenIds,
+        data: data.data,
+        lastUpdated: Date.now()
+      }, null, 2)
+    ).catch(console.error);
 
-    const result = {
-      tokenIds: processedTokens.map(t => t.id),
-      data: processedTokens,
+    // Send response
+    res.json({
+      tokenIds: data.tokenIds,
+      data: data.data,
       pagination: {
-        currentPage: parseInt(page),
-        totalTokens: data.total || processedTokens.length,
-        hasMore: false // Since we're getting all tokens
+        currentPage: 1,
+        totalTokens: data.tokenIds.length,
+        hasMore: false
       }
-    };
-    
-    // Cache the results
-    await cacheData(cacheKey, result, 10000);
-    
-    res.json(result);
-  } catch (error) {
-    console.error('Error in /api/all-tokens:', error.message);
-    
-    // Try to return expired cache if available
-    const { page = '1', limit = '100' } = req.query;
-    const cacheKey = `all_tokens_${page}_${limit}`;
-    const expiredData = await getCachedData(cacheKey, 10000);
-
-    if (expiredData) {
-      return res.json(expiredData);
-    }
-    
-    res.status(500).json({ 
-      error: 'Failed to fetch token data',
-      details: error.message
     });
+  } catch (error) {
+    console.error('Error in /api/all-tokens:', error);
+
+    // Try to serve stale cache if available
+    try {
+      const fileContent = await fs.readFile(TOKENS_CACHE_FILE, 'utf-8');
+      const cacheData = JSON.parse(fileContent);
+      console.log('Serving stale cache due to error');
+      return res.json({
+        tokenIds: cacheData.tokenIds,
+        data: cacheData.data,
+        pagination: {
+          currentPage: 1,
+          totalTokens: cacheData.tokenIds.length,
+          hasMore: false
+        }
+      });
+    } catch (err) {
+      // If everything fails, return error
+      res.status(500).json({ 
+        error: 'Failed to fetch token data',
+        details: error.message
+      });
+    }
   }
 });
 
@@ -2661,3 +2666,64 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
     });
   }
 });
+
+// Add these constants near the top
+const TOKENS_CACHE_FILE = path.join(process.cwd(), 'tokens-cache.json');
+const TOKENS_UPDATE_INTERVAL = 30000; // 30 seconds
+
+// Add this function to handle token updates
+async function updateTokensCache() {
+  try {
+    // Fetch latest tokens
+    const response = await fetch('https://api.odin.fun/v1/all-tokens', {
+      headers: {
+        ...API_HEADERS,
+        'User-Agent': getRandomUserAgent(),
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch tokens: ${response.status}`);
+    }
+
+    const newData = await response.json();
+
+    // Read existing cache
+    let existingData = { tokenIds: [], data: [], lastUpdated: 0 };
+    try {
+      const fileContent = await fs.readFile(TOKENS_CACHE_FILE, 'utf-8');
+      existingData = JSON.parse(fileContent);
+    } catch (err) {
+      // File doesn't exist or is invalid, will create new one
+    }
+
+    // Check if we have new tokens
+    const newTokenIds = new Set(newData.tokenIds);
+    const oldTokenIds = new Set(existingData.tokenIds);
+    const hasNewTokens = newData.tokenIds.some(id => !oldTokenIds.has(id));
+    const hasRemovedTokens = existingData.tokenIds.some(id => !newTokenIds.has(id));
+
+    if (hasNewTokens || hasRemovedTokens) {
+      console.log('New or removed tokens detected, updating cache...');
+      // Update cache file
+      await fs.writeFile(
+        TOKENS_CACHE_FILE,
+        JSON.stringify({
+          tokenIds: newData.tokenIds,
+          data: newData.data,
+          lastUpdated: Date.now()
+        }, null, 2)
+      );
+      console.log('Cache updated successfully');
+    } else {
+      console.log('No new tokens detected, cache is up to date');
+    }
+  } catch (error) {
+    console.error('Error updating tokens cache:', error);
+  }
+}
+
+// Start background update process when server starts
+setInterval(updateTokensCache, TOKENS_UPDATE_INTERVAL);
+// Also update immediately when server starts
+updateTokensCache().catch(console.error);
