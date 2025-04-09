@@ -2541,17 +2541,16 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
           // Calculate average buy price in BTC
           const avgBuyPriceBTC = totalTokensBought > 0 
             ? totalCostBTC / totalTokensBought 
-            : 0;
+            : currentPriceBTC; // Use current price if no buy history
 
           // Current holdings in proper units
           const currentHoldings = Number(holder.balance) / 1e11;
           
           // Calculate PnL
-          const costBasisUSD = totalTokensBought > 0 
-            ? (avgBuyPriceBTC * btcUsdPrice * currentHoldings)
-            : 0;
+          const costBasisUSD = avgBuyPriceBTC * btcUsdPrice * currentHoldings;
           const currentValueUSD = currentPriceUSD * currentHoldings;
-          const pnlUSD = currentValueUSD - costBasisUSD;
+          // Store PnL in satoshis (multiply by 1e8) for consistent unit handling
+          const pnlUSD = Math.round((currentValueUSD - costBasisUSD) * 1e8);
 
           console.log(`PnL calculation for ${holder.user}:`, {
             avgBuyPriceBTC,
@@ -2559,7 +2558,8 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
             currentHoldings,
             costBasisUSD,
             currentValueUSD,
-            pnlUSD
+            pnlUSD,
+            pnlUSDHuman: pnlUSD / 1e8
           });
 
           // Cache individual holder PnL
