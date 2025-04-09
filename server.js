@@ -2362,9 +2362,10 @@ app.get('/api/token-metrics/:tokenId/holder-growth', async (req, res) => {
     const { tokenId } = req.params;
     console.log(`Fetching holder growth metrics for token: ${tokenId}`);
 
-    // Check cache first
+    // Check cache first with proper null handling
     const cacheKey = `holder_growth_${tokenId}`;
-    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
+    const cachedResult = await getCachedData(cacheKey, CACHE_DURATION);
+    const cachedData = cachedResult?.data;
 
     if (cachedData) {
       console.log('Returning cached holder growth data');
@@ -2392,22 +2393,23 @@ app.get('/api/token-metrics/:tokenId/holder-growth', async (req, res) => {
     const holderGrowthMetrics = {
       dailyGrowth: {
         current: currentHolders,
-        previous: currentHolders, // We'll update this with historical data if available
+        previous: currentHolders,
         growthRate: 0,
         newHolders: 0
       },
       weeklyGrowth: {
         current: currentHolders,
-        previous: currentHolders, // We'll update this with historical data if available
+        previous: currentHolders,
         growthRate: 0,
         newHolders: 0
       },
-      retentionRate: 100 // Default to 100% if we can't calculate actual rate
+      retentionRate: 100
     };
 
-    // Try to get historical data from cache
+    // Try to get historical data from cache with proper null handling
     const historicalKey = `historical_holders_${tokenId}`;
-    const { data: historicalData } = await getCachedData(historicalKey) || {};
+    const historicalResult = await getCachedData(historicalKey);
+    const historicalData = historicalResult?.data;
 
     if (historicalData) {
       // Calculate daily growth
@@ -2450,14 +2452,15 @@ app.get('/api/token-metrics/:tokenId/holder-growth', async (req, res) => {
     await cacheData(cacheKey, holderGrowthMetrics, CACHE_DURATION);
     await cacheData(historicalKey, newHistoricalData, 7 * 24 * 60 * 60 * 1000); // Cache historical data for 7 days
 
-    console.log('Sending fresh holder growth metrics');
+    console.log('Sending fresh holder growth metrics:', holderGrowthMetrics);
     res.json(holderGrowthMetrics);
 
   } catch (error) {
     console.error('Error fetching holder growth:', error);
     res.status(500).json({ 
       error: 'Failed to fetch holder growth metrics',
-      message: error.message 
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
