@@ -179,11 +179,12 @@ app.get('/api/token/:tokenId', async (req, res) => {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
     // Fetch all required data in parallel
-    const [tokenData, tradesData, btcPriceData, holdersData] = await Promise.all([
+    const [tokenData, tradesData, btcPriceData, holdersData, creatorTokensResponse] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999&after=${twentyFourHoursAgo}`),
       fetch('https://mempool.space/api/v1/prices').then(res => res.json()),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`)
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`),
+      fetchWithHeaders(`https://api.odin.fun/v1/user/${tokenData?.creator}/created`)
     ]);
     
     // If no data is returned, send a 404 response
@@ -198,6 +199,12 @@ app.get('/api/token/:tokenId', async (req, res) => {
     const activeHolders = holdersData?.data?.filter(h => Number(h.balance) > 0) || [];
     const actualHolderCount = activeHolders.length;
     console.log(`Found ${actualHolderCount} active holders out of ${holdersData?.data?.length || 0} total holders`);
+
+    // Get creator's other tokens
+    const creatorTokens = creatorTokensResponse?.data || [];
+    const otherTokens = creatorTokens.filter(t => t.id !== tokenId);
+    const hasMultipleTokens = creatorTokens.length > 1;
+    console.log(`Creator has created ${creatorTokens.length} tokens`);
 
     // Calculate volume metrics only if we have trades
     let volumeMetrics = {
@@ -215,12 +222,21 @@ app.get('/api/token/:tokenId', async (req, res) => {
       volumeMetrics = calculateVolumeMetrics(tradesData.data, btcPriceData.USD);
     }
 
-    // Add volume metrics and correct holder count to token data
+    // Add all metrics to token data
     const enrichedTokenData = {
       ...tokenData,
-      holder_count: actualHolderCount,  // Use the actual count from active holders
+      holder_count: actualHolderCount,
       volumeMetrics,
-      isRugged: actualHolderCount === 0  // Add isRugged flag based on active holders
+      isRugged: actualHolderCount === 0,
+      creatorRisk: {
+        hasMultipleTokens,
+        tokenCount: creatorTokens.length,
+        otherTokens: otherTokens.map(t => ({
+          id: t.id,
+          name: t.name,
+          ticker: t.ticker
+        }))
+      }
     };
 
     // Update both caches
@@ -233,7 +249,8 @@ app.get('/api/token/:tokenId', async (req, res) => {
     console.log('Sending fresh token data:', {
       holder_count: actualHolderCount,
       isRugged: actualHolderCount === 0,
-      volume24h: volumeMetrics.volume24h
+      volume24h: volumeMetrics.volume24h,
+      creatorTokenCount: creatorTokens.length
     });
     
     res.json(enrichedTokenData);
