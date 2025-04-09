@@ -2354,3 +2354,112 @@ app.get('/api/btc-price', async (req, res) => {
 });
 
 // ... existing code ...
+
+// ... existing code ...
+// Add this new endpoint for holder growth metrics
+app.get('/api/token-metrics/:tokenId/holder-growth', async (req, res) => {
+  try {
+    const { tokenId } = req.params;
+    console.log(`Fetching holder growth metrics for token: ${tokenId}`);
+
+    // Check cache first
+    const cacheKey = `holder_growth_${tokenId}`;
+    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
+
+    if (cachedData) {
+      console.log('Returning cached holder growth data');
+      return res.json(cachedData);
+    }
+
+    // Fetch current holders
+    const holdersResponse = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=9999`);
+    if (!holdersResponse || !holdersResponse.data) {
+      throw new Error('Failed to fetch holders data');
+    }
+
+    // Get token data for creation time
+    const tokenResponse = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
+    if (!tokenResponse) {
+      throw new Error('Failed to fetch token data');
+    }
+
+    const currentHolders = holdersResponse.data.length;
+    const creationTime = new Date(tokenResponse.created_time);
+    const now = new Date();
+    const daysSinceCreation = Math.max(1, Math.floor((now - creationTime) / (24 * 60 * 60 * 1000)));
+
+    // Calculate metrics
+    const holderGrowthMetrics = {
+      dailyGrowth: {
+        current: currentHolders,
+        previous: currentHolders, // We'll update this with historical data if available
+        growthRate: 0,
+        newHolders: 0
+      },
+      weeklyGrowth: {
+        current: currentHolders,
+        previous: currentHolders, // We'll update this with historical data if available
+        growthRate: 0,
+        newHolders: 0
+      },
+      retentionRate: 100 // Default to 100% if we can't calculate actual rate
+    };
+
+    // Try to get historical data from cache
+    const historicalKey = `historical_holders_${tokenId}`;
+    const { data: historicalData } = await getCachedData(historicalKey) || {};
+
+    if (historicalData) {
+      // Calculate daily growth
+      if (historicalData.dailyHolders) {
+        holderGrowthMetrics.dailyGrowth.previous = historicalData.dailyHolders;
+        holderGrowthMetrics.dailyGrowth.newHolders = currentHolders - historicalData.dailyHolders;
+        holderGrowthMetrics.dailyGrowth.growthRate = historicalData.dailyHolders > 0 
+          ? ((currentHolders - historicalData.dailyHolders) / historicalData.dailyHolders) * 100 
+          : 0;
+      }
+
+      // Calculate weekly growth
+      if (historicalData.weeklyHolders) {
+        holderGrowthMetrics.weeklyGrowth.previous = historicalData.weeklyHolders;
+        holderGrowthMetrics.weeklyGrowth.newHolders = currentHolders - historicalData.weeklyHolders;
+        holderGrowthMetrics.weeklyGrowth.growthRate = historicalData.weeklyHolders > 0 
+          ? ((currentHolders - historicalData.weeklyHolders) / historicalData.weeklyHolders) * 100 
+          : 0;
+      }
+
+      // Calculate retention rate
+      if (historicalData.totalHolders > 0) {
+        const retainedHolders = holdersResponse.data.filter(holder => 
+          historicalData.holderIds.includes(holder.user)
+        ).length;
+        holderGrowthMetrics.retentionRate = (retainedHolders / historicalData.totalHolders) * 100;
+      }
+    }
+
+    // Update historical data
+    const newHistoricalData = {
+      dailyHolders: currentHolders,
+      weeklyHolders: historicalData?.weeklyHolders || currentHolders,
+      totalHolders: currentHolders,
+      holderIds: holdersResponse.data.map(holder => holder.user),
+      lastUpdated: new Date().toISOString()
+    };
+
+    // Cache the results
+    await cacheData(cacheKey, holderGrowthMetrics, CACHE_DURATION);
+    await cacheData(historicalKey, newHistoricalData, 7 * 24 * 60 * 60 * 1000); // Cache historical data for 7 days
+
+    console.log('Sending fresh holder growth metrics');
+    res.json(holderGrowthMetrics);
+
+  } catch (error) {
+    console.error('Error fetching holder growth:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch holder growth metrics',
+      message: error.message 
+    });
+  }
+});
+
+// ... existing code ...
