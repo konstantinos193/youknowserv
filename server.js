@@ -1851,36 +1851,81 @@ app.get('/api/all-tokens', async (req, res) => {
 app.get('/api/token-metrics/:tokenId', async (req, res) => {
   try {
     const { tokenId } = req.params;
+    console.log(`Fetching metrics for token: ${tokenId}`);
+    
+    // Check cache first
     const cacheKey = `token_metrics_${tokenId}`;
+    const { data: cachedMetrics } = await getCachedData(cacheKey, CACHE_DURATION) || {};
 
-    // Check cache
-    const { data: cachedMetrics } = await getCachedData(cacheKey, CACHE_DURATION);
-
-    if (cachedMetrics?.data) {
-      return res.json(cachedMetrics.data);
+    if (cachedMetrics) {
+      console.log('Returning cached metrics');
+      return res.json(cachedMetrics);
     }
 
-    // Fetch detailed metrics
-    const data = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
-    if (!data) {
-      throw new Error('Failed to fetch token metrics');
+    // Fetch required data in parallel
+    const [tokenResponse, tradesResponse, holdersResponse] = await Promise.all([
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`),
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`)
+    ]);
+
+    if (!tokenResponse || !tradesResponse || !holdersResponse) {
+      throw new Error('Failed to fetch required data');
     }
+
+    const trades = tradesResponse.data || [];
+    const holders = holdersResponse.data || [];
+    const currentHolderCount = holders.filter(h => Number(h.balance) > 0).length;
+
+    // Calculate metrics
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    // Calculate daily metrics
+    const dailyTrades = trades.filter(t => new Date(t.time) > oneDayAgo);
+    const dailyHolders = currentHolderCount;
+
+    // Calculate weekly metrics
+    const weeklyTrades = trades.filter(t => new Date(t.time) > oneWeekAgo);
+    const previousWeekHolders = holders.filter(h => {
+      const lastActivity = trades.find(t => t.user === h.user)?.time;
+      return lastActivity && new Date(lastActivity) > oneWeekAgo;
+    }).length;
 
     const metrics = {
-      ...calculateVolumeMetrics(data.trades || [], data.price || 0),
-      price: data.price || 0,
-      marketcap: data.marketcap || '0',
-      holder_count: data.holder_count || 0,
-      volume: data.volume || 0
+      dailyGrowth: {
+        current: dailyHolders,
+        previous: previousWeekHolders,
+        growthRate: previousWeekHolders > 0 ? ((dailyHolders - previousWeekHolders) / previousWeekHolders) * 100 : 0,
+        newHolders: dailyHolders - previousWeekHolders
+      },
+      weeklyGrowth: {
+        current: dailyHolders,
+        previous: previousWeekHolders,
+        growthRate: previousWeekHolders > 0 ? ((dailyHolders - previousWeekHolders) / previousWeekHolders) * 100 : 0,
+        newHolders: dailyHolders - previousWeekHolders
+      },
+      retentionRate: previousWeekHolders > 0 ? (dailyHolders / previousWeekHolders) * 100 : 100,
+      volumeMetrics: calculateVolumeMetrics(trades, tokenResponse.price || 0)
     };
 
-    // Cache metrics
+    // Cache the metrics
     await cacheData(cacheKey, metrics, CACHE_DURATION);
+
+    console.log('Sending fresh metrics:', {
+      currentHolders: dailyHolders,
+      previousHolders: previousWeekHolders,
+      retentionRate: metrics.retentionRate
+    });
 
     res.json(metrics);
   } catch (error) {
     console.error('Error fetching token metrics:', error);
-    res.status(500).json({ error: 'Failed to fetch token metrics' });
+    res.status(500).json({ 
+      error: 'Failed to fetch token metrics',
+      details: error.message 
+    });
   }
 });
 
