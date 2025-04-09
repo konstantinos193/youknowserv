@@ -2480,9 +2480,10 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
     }
 
     // Fetch required data in parallel
-    const [holdersResponse, btcPriceResponse] = await Promise.all([
+    const [holdersResponse, btcPriceResponse, tokenResponse] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`),
-      fetch('https://mempool.space/api/v1/prices')
+      fetch('https://mempool.space/api/v1/prices'),
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`)
     ]);
 
     if (!holdersResponse?.data) {
@@ -2491,7 +2492,11 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
     }
 
     const btcUsdPrice = btcPriceResponse.ok ? (await btcPriceResponse.json()).USD : 0;
-    console.log('Processing PnL for holders with BTC price:', btcUsdPrice);
+    const tokenData = tokenResponse;
+    const currentPriceBTC = Number(tokenData.price) / 1e8; // Convert from satoshis to BTC
+    const currentPriceUSD = currentPriceBTC * btcUsdPrice;
+
+    console.log('Current token price:', { btc: currentPriceBTC, usd: currentPriceUSD });
 
     // Process holders in parallel with rate limiting
     const holdersWithPnL = await Promise.all(
@@ -2525,33 +2530,37 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
           
           let totalCostBTC = 0;
           let totalTokensBought = 0;
-          let totalReceivedBTC = 0;
-          let totalTokensSold = 0;
 
           trades.forEach(trade => {
             if (trade.action === "BUY") {
-              totalCostBTC += Number(trade.amount_btc) / 1e8;
-              totalTokensBought += Number(trade.amount_token) / 1e11;
-            } else if (trade.action === "SELL") {
-              totalReceivedBTC += Number(trade.amount_btc) / 1e8;
-              totalTokensSold += Number(trade.amount_token) / 1e11;
+              totalCostBTC += Number(trade.amount_btc) / 1e8; // Convert from satoshis to BTC
+              totalTokensBought += Number(trade.amount_token) / 1e11; // Convert to proper token units
             }
           });
 
-          // Calculate average buy price in USD
-          const avgBuyPriceUSD = totalTokensBought > 0 
-            ? (totalCostBTC * btcUsdPrice) / totalTokensBought 
+          // Calculate average buy price in BTC
+          const avgBuyPriceBTC = totalTokensBought > 0 
+            ? totalCostBTC / totalTokensBought 
             : 0;
 
           // Current holdings in proper units
           const currentHoldings = Number(holder.balance) / 1e11;
           
-          // Calculate current value and PnL
-          const currentValueUSD = currentHoldings * avgBuyPriceUSD;
-          const costBasisUSD = currentHoldings * avgBuyPriceUSD;
+          // Calculate PnL
+          const costBasisUSD = totalTokensBought > 0 
+            ? (avgBuyPriceBTC * btcUsdPrice * currentHoldings)
+            : 0;
+          const currentValueUSD = currentPriceUSD * currentHoldings;
           const pnlUSD = currentValueUSD - costBasisUSD;
 
-          console.log(`Calculated PnL for holder ${holder.user}:`, pnlUSD);
+          console.log(`PnL calculation for ${holder.user}:`, {
+            avgBuyPriceBTC,
+            currentPriceBTC,
+            currentHoldings,
+            costBasisUSD,
+            currentValueUSD,
+            pnlUSD
+          });
 
           // Cache individual holder PnL
           await cacheData(holderCacheKey, {
