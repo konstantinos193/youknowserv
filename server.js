@@ -866,32 +866,17 @@ const calculateVolumeMetrics = (trades) => {
 
   const trades24h = trades.filter(tx => new Date(tx.time) > last24h);
   
-  // Calculate total 24h volume in BTC, properly handling divisibility
-  const volume24h = trades24h.reduce((sum, tx) => {
-    // Convert amount_btc from satoshis to BTC (divide by 1e8)
-    const btcAmount = Number(tx.amount_btc) / 1e8;
-    // Convert amount_token to proper units (divide by 1e11)
-    const tokenAmount = Number(tx.amount_token) / 1e11;
-    // Calculate volume in BTC
-    return sum + (btcAmount * tokenAmount);
-  }, 0);
+  // Calculate total 24h volume in BTC (amount_btc is in satoshis)
+  const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
   // Calculate buy and sell volumes in BTC
   const buyVolume24h = trades24h
     .filter(tx => tx.buy)
-    .reduce((sum, tx) => {
-      const btcAmount = Number(tx.amount_btc) / 1e8;
-      const tokenAmount = Number(tx.amount_token) / 1e11;
-      return sum + (btcAmount * tokenAmount);
-    }, 0);
+    .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
   
   const sellVolume24h = trades24h
     .filter(tx => !tx.buy)
-    .reduce((sum, tx) => {
-      const btcAmount = Number(tx.amount_btc) / 1e8;
-      const tokenAmount = Number(tx.amount_token) / 1e11;
-      return sum + (btcAmount * tokenAmount);
-    }, 0);
+    .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
   // Calculate buy/sell ratio (avoid division by zero)
   const buySellRatio = sellVolume24h > 0 ? buyVolume24h / sellVolume24h : 1;
@@ -901,11 +886,7 @@ const calculateVolumeMetrics = (trades) => {
     const txTime = new Date(tx.time);
     return txTime > last7d && txTime <= last24h;
   });
-  const volume7d = trades7d.reduce((sum, tx) => {
-    const btcAmount = Number(tx.amount_btc) / 1e8;
-    const tokenAmount = Number(tx.amount_token) / 1e11;
-    return sum + (btcAmount * tokenAmount);
-  }, 0);
+  const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
   const averageDailyVolume = volume7d / 6;
 
   // Calculate volume change percentage
