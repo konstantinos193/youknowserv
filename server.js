@@ -37,13 +37,12 @@ app.use(compression());
 const memoryCache = new Map();
 const MEMORY_CACHE_DURATION = 60000; // 1 minute
 
-// Middleware
+// Enable CORS for specific origins
 app.use(cors({
-  origin: '*',  // Allow all origins
+  origin: ['https://odinscan.fun', 'http://localhost:3000'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept', 'Accept-Language', 'Origin', 'Referer'],
-  credentials: true,
-  optionsSuccessStatus: 200
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 }));
 
 // Add CORS headers to every response
