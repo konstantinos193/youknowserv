@@ -18,6 +18,11 @@ const INITIAL_TOKEN_LIMIT = 100; // Only process 100 tokens initially
 const BATCH_SIZE = 5;
 const BATCH_DELAY = 500; // 500ms between batches
 
+// List of trusted developer IDs
+const TRUSTED_DEVELOPERS = [
+  'vv5jb-7sm7u-vn3nq-6nflf-dghis-fd7ji-cx764-xunni-zosog-eqvpw-oae'  // bob
+];
+
 const app = express();
 const port = process.env.PORT || 3001;
 // ... other requires and code ...
