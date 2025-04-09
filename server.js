@@ -834,14 +834,20 @@ const fetchOdinAPI = async (endpoint) => {
 // Add this new endpoint for tokens
 app.get('/api/tokens', async (req, res) => {
   try {
-    const { sort = 'created_time:desc', page = '1', limit = '20' } = req.query;
+    // Check cache first
+    const cachedResult = await getCachedData('all_tokens_cache', TOKEN_CACHE_DURATION);
+    if (cachedResult) {
+      console.log('Returning cached tokens');
+      return res.json(cachedResult);
+    }
 
-    // Fetch from Odin API
-    const data = await fetchOdinAPI('/tokens', {
-      sort,
-      page,
-      limit
-    });
+    console.log('No valid cache found, fetching from API');
+    // Single API call to get tokens with all needed data
+    const { sort = 'created_time:desc', page = '1', limit = '20' } = req.query;
+    const data = await fetchOdinAPI('/tokens', { sort, page, limit });
+
+    // Cache the new data
+    await cacheData('all_tokens_cache', data, TOKEN_CACHE_DURATION);
 
     res.json(data);
   } catch (error) {
@@ -1951,29 +1957,23 @@ const MAX_CONCURRENT_REQUESTS = 3; // Limit concurrent API calls
 // setInterval(checkForNewTokens, NEW_TOKEN_POLL_INTERVAL);
 
     // Check cache first
-    const { data: cachedTokens } = await getCachedData('all_tokens_cache', TOKEN_CACHE_DURATION);
+    const cachedResult = await getCachedData('all_tokens_cache', TOKEN_CACHE_DURATION);
+    if (cachedResult && cachedResult.data) {
+      return res.json(cachedResult.data);
+    }
 
-async function checkCache(key) {
-  try {
-    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
+    // Single API call to get tokens with all needed data
+    const { sort = 'created_time:desc', page = '1', limit = '20' } = req.query;
+    const data = await fetchOdinAPI('/tokens', { sort, page, limit });
 
-    return cachedData?.data || null;
+    res.json(data);
   } catch (error) {
-    console.error('Error checking cache:', error);
-    return null;
+    console.error('Tokens fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch tokens' });
   }
-}
+});
 
-async function getExpiredCache(key) {
-  try {
-    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
-
-    return cachedData?.data || null;
-  } catch (error) {
-    console.error('Error getting expired cache:', error);
-    return null;
-  }
-}
+// ... existing code ...
 
 // Add this helper function for fetching with timeout
 const fetchWithTimeout = async (url, options = {}, timeout = 10000) => {
@@ -2202,3 +2202,25 @@ app.use((req, res, next) => {
   
   next();
 });
+
+async function checkCache(key) {
+  try {
+    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
+
+    return cachedData?.data || null;
+  } catch (error) {
+    console.error('Error checking cache:', error);
+    return null;
+  }
+}
+
+async function getExpiredCache(key) {
+  try {
+    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
+
+    return cachedData?.data || null;
+  } catch (error) {
+    console.error('Error getting expired cache:', error);
+    return null;
+  }
+}
