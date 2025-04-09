@@ -7,8 +7,8 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import fetch from 'node-fetch';
-import { readData, writeData, cacheData, getCachedData, deleteCachedData } from './localStorage.js';
-import { cacheData, getCachedData, deleteCachedData } from './cache.js';
+import { readData, writeData, deleteCachedData } from './localStorage.js';
+import { cacheData, getCachedData } from './cache.js';
 
 // Initialize environment variables
 dotenv.config();
