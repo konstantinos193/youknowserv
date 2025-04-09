@@ -2251,3 +2251,44 @@ async function getExpiredCache(key) {
     return null;
   }
 }
+
+// ... existing code ...
+
+// Add BTC price endpoint
+app.get('/api/btc-price', async (req, res) => {
+  try {
+    // Check cache first
+    const cacheKey = 'btc_price';
+    const { data: cachedPrice } = await getCachedData(cacheKey, 60000) || {};  // 1 minute cache
+
+    if (cachedPrice) {
+      return res.json(cachedPrice);
+    }
+
+    // Fetch from mempool.space API
+    const response = await fetch('https://mempool.space/api/v1/prices', {
+      headers: {
+        'User-Agent': getRandomUserAgent()
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch BTC price: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    // Cache the price
+    await cacheData(cacheKey, data, 60000);
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching BTC price:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch BTC price',
+      message: error.message 
+    });
+  }
+});
+
+// ... existing code ...
