@@ -177,7 +177,7 @@ app.get('/api/token/:tokenId', async (req, res) => {
     // Fetch all required data in parallel with optimized queries
     const [tokenData, tradesData, btcPriceData] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=1000&after=${twentyFourHoursAgo}`),
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999&after=${twentyFourHoursAgo}`),
       fetch('https://mempool.space/api/v1/prices').then(res => res.json())
     ]);
     
