@@ -178,7 +178,7 @@ app.get('/api/token/:tokenId', async (req, res) => {
     // Calculate timestamp for 24h ago
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-    // Fetch all required data in parallel with optimized queries
+    // Fetch all required data in parallel
     const [tokenData, tradesData, btcPriceData] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999&after=${twentyFourHoursAgo}`),
@@ -206,19 +206,13 @@ app.get('/api/token/:tokenId', async (req, res) => {
     };
 
     if (tradesData?.data?.length > 0) {
-      volumeMetrics = calculateVolumeMetrics(tradesData.data);
+      volumeMetrics = calculateVolumeMetrics(tradesData.data, btcPriceData.USD);
     }
 
     // Add volume metrics to token data
     const enrichedTokenData = {
       ...tokenData,
-      volumeMetrics: {
-        ...volumeMetrics,
-        volume24hUSD: volumeMetrics.volume24h * btcPriceData.USD,
-        averageDailyVolumeUSD: volumeMetrics.averageDailyVolume * btcPriceData.USD,
-        buyVolumeUSD: volumeMetrics.buyVolume24h * btcPriceData.USD,
-        sellVolumeUSD: volumeMetrics.sellVolume24h * btcPriceData.USD
-      }
+      volumeMetrics
     };
 
     // Update both caches
@@ -731,7 +725,7 @@ app.get('/api/token-analysis/:tokenId', async (req, res) => {
     const dangers = [];
     
     // Volume Analysis
-    const volumeMetrics = calculateVolumeMetrics(trades);
+    const volumeMetrics = calculateVolumeMetrics(trades, btcUsdPrice);
     console.log('Volume metrics calculated:', volumeMetrics);
     
     if (volumeMetrics.spikeRatio > 3) {
@@ -863,7 +857,7 @@ app.get('/api/token-analysis/:tokenId', async (req, res) => {
 });
 
 // Add this helper function
-const calculateVolumeMetrics = (trades) => {
+const calculateVolumeMetrics = (trades, btcUsdPrice) => {
   const now = new Date();
   const last24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
   const last7d = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
@@ -897,11 +891,6 @@ const calculateVolumeMetrics = (trades) => {
   const volumeChange = averageDailyVolume > 0 
     ? ((volume24h - averageDailyVolume) / averageDailyVolume * 100).toFixed(2)
     : '0.00';
-
-  // Get BTC/USD price
-  const btcPriceResponse = await fetch('https://mempool.space/api/v1/prices');
-  const btcPriceData = await btcPriceResponse.json();
-  const btcUsdPrice = btcPriceData.USD;
 
   // Calculate USD values with correct scaling (divide by 1e3)
   const volume24hUSD = (volume24h * btcUsdPrice) / 1e3;
@@ -1817,7 +1806,7 @@ app.get('/api/token-metrics/:tokenId', async (req, res) => {
     }
 
     const metrics = {
-      ...calculateVolumeMetrics(data.trades || []),
+      ...calculateVolumeMetrics(data.trades || [], data.price || 0),
       price: data.price || 0,
       marketcap: data.marketcap || '0',
       holder_count: data.holder_count || 0,
@@ -2166,7 +2155,7 @@ async function processTokensInBatches(tokens, batchSize = BATCH_SIZE) {
             return {
               id: token.id,
               ...data,
-              volumeMetrics: calculateVolumeMetrics(data.trades || [])
+              volumeMetrics: calculateVolumeMetrics(data.trades || [], data.price || 0)
             };
           } catch (error) {
             console.error(`Error processing token ${token.id}:`, error.message);
@@ -2230,7 +2219,7 @@ app.get('/api/dashboard/:tokenId', async (req, res) => {
       whaleActivity: whaleActivity,
       holders: holdersData.data || [],
       trades: tradesData.data || [],
-      metrics: calculateVolumeMetrics(tradesData.data || [])
+      metrics: calculateVolumeMetrics(tradesData.data || [], btcPriceData.USD)
     };
 
     // Cache the result
