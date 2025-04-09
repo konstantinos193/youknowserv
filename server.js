@@ -38,32 +38,25 @@ const memoryCache = new Map();
 const MEMORY_CACHE_DURATION = 60000; // 1 minute
 
 // Enable CORS with proper configuration
-const allowedOrigins = [
-  'https://odinscan.fun',
-  'http://localhost:3000',
-  'https://odinscan.vercel.app',
-  'http://deape.ddns.net:3001'
-];
-
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) === -1) {
-      console.log('Origin not allowed:', origin);
-      return callback(null, false);
-    }
-    return callback(null, true);
-  },
+  origin: true, // Allow all origins during development
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept', 'Accept-Language', 'Origin', 'Referer'],
-  credentials: true,
+  exposedHeaders: ['Content-Length', 'Content-Type'],
   maxAge: 86400 // Cache preflight requests for 24 hours
 }));
 
-// Add OPTIONS handling for preflight requests
+// Handle preflight requests for all routes
 app.options('*', cors());
+
+// Add this middleware to log all requests
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  console.log('Origin:', req.headers.origin);
+  console.log('Headers:', req.headers);
+  next();
+});
 
 app.use(express.json());
 
@@ -117,18 +110,25 @@ const fetchWithHeaders = async (url, retryCount = 0, maxRetries = 5) => {
     const headers = {
       ...API_HEADERS,
       'User-Agent': getRandomUserAgent(),
+      'Accept': 'application/json',
+      'Origin': 'https://odinscan.fun'
     };
 
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, { 
+      headers,
+      mode: 'cors',
+      credentials: 'include'
+    });
 
     // Log the response status and headers for debugging
     console.log(`Response Status: ${response.status}`);
-    console.log(`Response Headers: ${JSON.stringify([...response.headers])}`);
+    console.log(`Response Headers:`, Object.fromEntries(response.headers));
 
     if (response.status === 403) {
-      console.warn(`403 Forbidden for URL: ${url}. Retrying...`);
+      console.warn(`403 Forbidden for URL: ${url}. Retrying with delay...`);
       if (retryCount < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait before retrying
+        const delay = Math.min(1000 * Math.pow(2, retryCount), 10000); // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, delay));
         return fetchWithHeaders(url, retryCount + 1, maxRetries);
       } else {
         throw new Error('Max retries reached for 403 error');
@@ -136,14 +136,20 @@ const fetchWithHeaders = async (url, retryCount = 0, maxRetries = 5) => {
     }
 
     if (!response.ok) {
-      const text = await response.text(); // Get the response text for logging
+      const text = await response.text();
       console.error(`API response not ok: ${response.status}, Response: ${text}`);
       throw new Error(`API response not ok: ${response.status}`);
     }
 
-    return await response.json();
+    const data = await response.json();
+    return data;
   } catch (error) {
     console.error(`Error fetching ${url}:`, error.message);
+    if (retryCount < maxRetries) {
+      const delay = Math.min(1000 * Math.pow(2, retryCount), 10000);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return fetchWithHeaders(url, retryCount + 1, maxRetries);
+    }
     return null;
   }
 };
