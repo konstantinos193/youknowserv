@@ -547,16 +547,16 @@ app.get('/api/token-data/:tokenId', async (req, res) => {
     const sellTrades = trades24h.filter(tx => !tx.buy);
 
     // Calculate BTC volumes
-    const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
-    const buyVolume24h = buyTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
-    const sellVolume24h = sellTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+    const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+    const buyVolume24h = buyTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+    const sellVolume24h = sellTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
     // Calculate 7d average
     const trades7d = trades.filter(tx => {
       const txTime = new Date(tx.time);
       return txTime > last7d && txTime <= last24h;
     });
-    const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+    const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
     const averageDailyVolume = volume7d / 6;
 
     // Calculate USD values
@@ -808,16 +808,16 @@ const calculateVolumeMetrics = (trades) => {
   const trades24h = trades.filter(tx => new Date(tx.time) > last24h);
   
   // Calculate total 24h volume
-  const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+  const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
   // Calculate buy and sell volumes
   const buyVolume24h = trades24h
     .filter(tx => tx.buy)
-    .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+    .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
   
   const sellVolume24h = trades24h
     .filter(tx => !tx.buy)
-    .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+    .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
   // Calculate buy/sell ratio (avoid division by zero)
   const buySellRatio = sellVolume24h > 0 ? buyVolume24h / sellVolume24h : 1;
@@ -827,7 +827,7 @@ const calculateVolumeMetrics = (trades) => {
     const txTime = new Date(tx.time);
     return txTime > last7d && txTime <= last24h;
   });
-  const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+  const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
   const averageDailyVolume = volume7d / 6;
 
   return {
@@ -1042,16 +1042,16 @@ app.get('/api/batch-tokens', async (req, res) => {
         const sellTrades = trades24h.filter(tx => !tx.buy);
 
         // Calculate BTC volumes
-        const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
-        const buyVolume24h = buyTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
-        const sellVolume24h = sellTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+        const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+        const buyVolume24h = buyTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+        const sellVolume24h = sellTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
         // Calculate 7d average
         const trades7d = trades.filter(tx => {
           const txTime = new Date(tx.time);
           return txTime > last7d && txTime <= last24h;
         });
-        const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+        const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
         const averageDailyVolume = volume7d / 6;
 
         // Get BTC/USD price
@@ -1885,16 +1885,16 @@ app.get('/api/token/:tokenId/metrics', async (req, res) => {
     const sellTrades = trades24h.filter(tx => !tx.buy);
 
     // Calculate BTC volumes
-    const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
-    const buyVolume24h = buyTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
-    const sellVolume24h = sellTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+    const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+    const buyVolume24h = buyTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+    const sellVolume24h = sellTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
     // Calculate 7d average
     const trades7d = trades.filter(tx => {
       const txTime = new Date(tx.time);
       return txTime > last7d && txTime <= last24h;
     });
-    const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e11), 0);
+    const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
     const averageDailyVolume = volume7d / 6;
 
     // Get BTC/USD price
