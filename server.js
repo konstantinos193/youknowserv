@@ -1874,7 +1874,7 @@ app.get('/api/token-metrics/:tokenId', async (req, res) => {
     const [tokenResponse, tradesResponse, holdersResponse] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`)
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=99999`)
     ]);
 
     if (!tokenResponse || !tradesResponse || !holdersResponse) {
@@ -1883,38 +1883,59 @@ app.get('/api/token-metrics/:tokenId', async (req, res) => {
 
     const trades = tradesResponse.data || [];
     const holders = holdersResponse.data || [];
-    const currentHolderCount = holders.filter(h => Number(h.balance) > 0).length;
-
-    // Calculate metrics
+    
+    // Calculate current and previous holder counts
     const now = new Date();
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    // Calculate daily metrics
-    const dailyTrades = trades.filter(t => new Date(t.time) > oneDayAgo);
-    const dailyHolders = currentHolderCount;
+    // Get current active holders (balance > 0)
+    const currentHolders = holders.filter(h => Number(h.balance) > 0).length;
 
-    // Calculate weekly metrics
+    // Get previous day holders by looking at trades
+    const dailyTrades = trades.filter(t => new Date(t.time) > oneDayAgo);
+    const uniqueHoldersBeforeDay = new Set();
+    dailyTrades.forEach(trade => {
+      if (trade.action === "SELL") uniqueHoldersBeforeDay.add(trade.user);
+    });
+    const previousDayHolders = Math.max(currentHolders - uniqueHoldersBeforeDay.size, 0);
+
+    // Get previous week holders
     const weeklyTrades = trades.filter(t => new Date(t.time) > oneWeekAgo);
-    const previousWeekHolders = holders.filter(h => {
-      const lastActivity = trades.find(t => t.user === h.user)?.time;
-      return lastActivity && new Date(lastActivity) > oneWeekAgo;
-    }).length;
+    const uniqueHoldersBeforeWeek = new Set();
+    weeklyTrades.forEach(trade => {
+      if (trade.action === "SELL") uniqueHoldersBeforeWeek.add(trade.user);
+    });
+    const previousWeekHolders = Math.max(currentHolders - uniqueHoldersBeforeWeek.size, 0);
+
+    // Calculate growth rates
+    const dailyGrowthRate = previousDayHolders > 0 
+      ? ((currentHolders - previousDayHolders) / previousDayHolders) * 100 
+      : 0;
+
+    const weeklyGrowthRate = previousWeekHolders > 0 
+      ? ((currentHolders - previousWeekHolders) / previousWeekHolders) * 100 
+      : 0;
+
+    // Calculate retention rate
+    const retentionRate = previousDayHolders > 0 
+      ? (currentHolders / previousDayHolders) * 100 
+      : 100;
 
     const metrics = {
       dailyGrowth: {
-        current: dailyHolders,
-        previous: previousWeekHolders,
-        growthRate: previousWeekHolders > 0 ? ((dailyHolders - previousWeekHolders) / previousWeekHolders) * 100 : 0,
-        newHolders: dailyHolders - previousWeekHolders
+        current: currentHolders,
+        previous: previousDayHolders,
+        growthRate: dailyGrowthRate,
+        newHolders: currentHolders - previousDayHolders
       },
       weeklyGrowth: {
-        current: dailyHolders,
+        current: currentHolders,
         previous: previousWeekHolders,
-        growthRate: previousWeekHolders > 0 ? ((dailyHolders - previousWeekHolders) / previousWeekHolders) * 100 : 0,
-        newHolders: dailyHolders - previousWeekHolders
+        growthRate: weeklyGrowthRate,
+        newHolders: currentHolders - previousWeekHolders
       },
-      retentionRate: previousWeekHolders > 0 ? (dailyHolders / previousWeekHolders) * 100 : 100,
+      retentionRate: Math.min(retentionRate, 100), // Cap at 100%
       volumeMetrics: calculateVolumeMetrics(trades, tokenResponse.price || 0)
     };
 
@@ -1922,9 +1943,10 @@ app.get('/api/token-metrics/:tokenId', async (req, res) => {
     await cacheData(cacheKey, metrics, CACHE_DURATION);
 
     console.log('Sending fresh metrics:', {
-      currentHolders: dailyHolders,
-      previousHolders: previousWeekHolders,
-      retentionRate: metrics.retentionRate
+      currentHolders,
+      previousDayHolders,
+      dailyGrowthRate,
+      retentionRate
     });
 
     res.json(metrics);
