@@ -2834,3 +2834,158 @@ async function updateTokensCache() {
 setInterval(updateTokensCache, TOKENS_UPDATE_INTERVAL);
 // Also update immediately when server starts
 updateTokensCache().catch(console.error);
+
+// Add these endpoints after the existing ones
+
+// 1. Endpoint for fetching tokens with risk assessment
+app.get('/api/safe-tokens', async (req, res) => {
+    try {
+        const response = await fetch('https://api.odin.fun/v1/tokens?page=1&limit=100&sort=created_time:desc', {
+            headers: API_HEADERS
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to fetch tokens: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const tokens = data.data || [];
+
+        // Add risk assessment for each token
+        const tokensWithRisk = await Promise.all(tokens.map(async (token) => {
+            try {
+                // Fetch holders data
+                const holdersResponse = await fetch(
+                    `https://api.odin.fun/v1/token/${token.id}/owners?page=1&limit=100`,
+                    { headers: API_HEADERS }
+                );
+                const holdersData = await holdersResponse.json();
+                const holders = holdersData.data || [];
+
+                // Calculate risk metrics
+                const devHolder = holders.find(h => h.user === token.creator);
+                const devBalance = devHolder ? Number(devHolder.balance) : 0;
+                const devPercentage = (devBalance / Number(token.total_supply)) * 100;
+
+                const sortedHolders = [...holders].sort((a, b) => Number(b.balance) - Number(a.balance));
+                const top5Balance = sortedHolders.slice(0, 5).reduce((sum, h) => sum + Number(h.balance), 0);
+                const top5Percentage = (top5Balance / Number(token.total_supply)) * 100;
+
+                // Determine risk level
+                let riskLevel = 'high';
+                if (devPercentage >= 5 || top5Percentage >= 20) {
+                    riskLevel = 'low';
+                } else if (devPercentage >= 2 || top5Percentage >= 10) {
+                    riskLevel = 'guarded';
+                }
+
+                return {
+                    ...token,
+                    riskLevel,
+                    metrics: {
+                        devPercentage,
+                        top5Percentage,
+                        holderCount: holders.length
+                    }
+                };
+            } catch (error) {
+                console.error(`Error processing token ${token.id}:`, error);
+                return { ...token, riskLevel: 'unknown' };
+            }
+        }));
+
+        res.json(tokensWithRisk);
+    } catch (error) {
+        console.error('Error fetching safe tokens:', error);
+        res.status(500).json({ error: 'Failed to fetch safe tokens' });
+    }
+});
+
+// 2. Endpoint for token holders with detailed metrics
+app.get('/api/token/:tokenId/holders-metrics', async (req, res) => {
+    try {
+        const { tokenId } = req.params;
+        
+        // Fetch holders data
+        const holdersResponse = await fetch(
+            `https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`,
+            { headers: API_HEADERS }
+        );
+        
+        if (!holdersResponse.ok) {
+            throw new Error(`Failed to fetch holders: ${holdersResponse.status}`);
+        }
+
+        const holdersData = await holdersResponse.json();
+        const holders = holdersData.data || [];
+
+        // Calculate metrics
+        const devHolder = holders.find(h => h.user === holdersData.creator);
+        const devBalance = devHolder ? Number(devHolder.balance) : 0;
+        const totalSupply = Number(holdersData.total_supply);
+        const devPercentage = (devBalance / totalSupply) * 100;
+
+        const sortedHolders = [...holders].sort((a, b) => Number(b.balance) - Number(a.balance));
+        const top5Balance = sortedHolders.slice(0, 5).reduce((sum, h) => sum + Number(h.balance), 0);
+        const top5Percentage = (top5Balance / totalSupply) * 100;
+
+        res.json({
+            holders,
+            metrics: {
+                devPercentage,
+                top5Percentage,
+                holderCount: holders.length,
+                devBalance,
+                top5Balance
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching holder metrics:', error);
+        res.status(500).json({ error: 'Failed to fetch holder metrics' });
+    }
+});
+
+// 3. Endpoint for token price updates
+app.get('/api/token/:tokenId/price', async (req, res) => {
+    try {
+        const { tokenId } = req.params;
+        
+        // Fetch token data
+        const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
+            headers: API_HEADERS
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to fetch token: ${response.status}`);
+        }
+
+        const tokenData = await response.json();
+        
+        // Get BTC price
+        const btcPriceResponse = await fetch('https://mempool.space/api/v1/prices');
+        const btcPriceData = await btcPriceResponse.json();
+        const btcUsdPrice = btcPriceData.USD;
+
+        // Calculate price in USD
+        const btcPrice = Number(tokenData.price) / 1e8;
+        const usdPrice = btcPrice * btcUsdPrice;
+
+        res.json({
+            btcPrice,
+            tokenPrice: btcPrice,
+            usdPrice: usdPrice.toFixed(8)
+        });
+    } catch (error) {
+        console.error('Error fetching token price:', error);
+        res.status(500).json({ error: 'Failed to fetch token price' });
+    }
+});
+
+// 4. Add rate limiting middleware
+const rateLimit = require('express-rate-limit');
+
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again after 15 minutes'
+});
