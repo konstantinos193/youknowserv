@@ -559,161 +559,117 @@ app.get('/api/token-data/:tokenId', async (req, res) => {
     const { tokenId } = req.params;
     console.log(`Processing token data for: ${tokenId}`);
     
-    // Check cache first
-    const { data: cachedData } = await getCachedData(`combined_data_${tokenId}`, 5000);
-
-    if (cachedData) {
-      return res.json(cachedData.data);
+    // Check cache first with proper null handling
+    const cachedResult = await getCachedData(`combined_data_${tokenId}`, 5000);
+    if (cachedResult?.data) {
+      console.log('Returning cached data');
+      return res.json(cachedResult.data);
     }
 
-    // Get previous holder count for growth calculation
-    const { data: previousData } = await getCachedData(`combined_data_${tokenId}`, 5000);
-    const previousHolderCount = previousData?.data?.token?.holder_count || 0;
+    // Get previous holder count with null safety
+    const previousResult = await getCachedData(`combined_data_${tokenId}`, 5000);
+    const previousHolderCount = previousResult?.data?.token?.holder_count || 0;
 
-    // Fetch all data in parallel
-    const [tokenResponse, holdersResponse, tradesResponse, btcPriceResponse] = await Promise.all([
+    console.log('Fetching data from API...');
+    
+    // Fetch all data in parallel with proper error handling
+    const [tokenResponse, holdersResponse, tradesResponse, btcPriceResponse] = await Promise.allSettled([
       fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
-        headers: API_HEADERS,
-        'User-Agent': getRandomUserAgent()
+        headers: {
+          ...API_HEADERS,
+          'User-Agent': getRandomUserAgent()
+        }
       }),
       fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`, {
-        headers: API_HEADERS,
-        'User-Agent': getRandomUserAgent()
+        headers: {
+          ...API_HEADERS,
+          'User-Agent': getRandomUserAgent()
+        }
       }),
       fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`, {
-        headers: API_HEADERS,
-        'User-Agent': getRandomUserAgent()
+        headers: {
+          ...API_HEADERS,
+          'User-Agent': getRandomUserAgent()
+        }
       }),
       fetch('https://mempool.space/api/v1/prices')
     ]);
 
-    // If any request fails, use cached data or fallback values
-    const [tokenData, holdersData, tradesData, btcPriceData] = await Promise.all([
-      tokenResponse.ok ? tokenResponse.json() : previousData?.data?.token || {},
-      holdersResponse.ok ? holdersResponse.json() : previousData?.data?.holders || { data: [] },
-      tradesResponse.ok ? tradesResponse.json() : previousData?.data?.trades || { data: [] },
-      btcPriceResponse.ok ? btcPriceResponse.json() : { USD: previousData?.data?.btcUsdPrice || 0 }
-    ]);
+    // Process responses with proper error handling
+    const tokenData = tokenResponse.status === 'fulfilled' && tokenResponse.value.ok ? 
+      await tokenResponse.value.json() : {};
+      
+    const holdersData = holdersResponse.status === 'fulfilled' && holdersResponse.value.ok ? 
+      await holdersResponse.value.json() : { data: [] };
+      
+    const tradesData = tradesResponse.status === 'fulfilled' && tradesResponse.value.ok ? 
+      await tradesResponse.value.json() : { data: [] };
+      
+    const btcPriceData = btcPriceResponse.status === 'fulfilled' && btcPriceResponse.value.ok ? 
+      await btcPriceResponse.value.json() : { USD: 0 };
+
+    console.log('API responses received:', {
+      hasTokenData: Object.keys(tokenData).length > 0,
+      holdersCount: holdersData.data?.length || 0,
+      tradesCount: tradesData.data?.length || 0,
+      btcPrice: btcPriceData.USD
+    });
 
     // Add fallback values for tokenData
-    if (!tokenData.holder_count) {
-      tokenData.holder_count = holdersData.data?.length || 0;
-    }
-    if (!tokenData.total_supply) {
-      tokenData.total_supply = '0';
-    }
-    if (!tokenData.marketcap) {
-      tokenData.marketcap = '0';
-    }
+    const safeTokenData = {
+      holder_count: holdersData.data?.length || 0,
+      total_supply: tokenData.total_supply || '0',
+      marketcap: tokenData.marketcap || '0',
+      ...tokenData
+    };
 
-    // Calculate holder growth rate
-    const currentHolderCount = tokenData.holder_count;
+    // Calculate holder growth rate with null safety
+    const currentHolderCount = safeTokenData.holder_count;
     const holderGrowthRate = previousHolderCount > 0 
       ? ((currentHolderCount - previousHolderCount) / previousHolderCount) * 100 
       : 0;
 
-    // Add debug logging
-    console.log('Raw token data:', {
-      total_supply: tokenData.total_supply,
-      marketcap: tokenData.marketcap
-    });
-
-    // Get values with type checking
-    const totalSupply = BigInt(tokenData.total_supply);
-    const marketcap = BigInt(tokenData.marketcap);
+    // Safe BigInt conversions
+    const totalSupply = BigInt(safeTokenData.total_supply || '0');
+    const marketcap = BigInt(safeTokenData.marketcap || '0');
 
     // Convert to numbers safely
     const totalSupplyNumber = Number(totalSupply) / 1e11;
     const marketcapBTC = Number(marketcap) / 1e8;
     
-    // Fix price calculation
-    const satoshiPrice = tokenData.price || 0;  // 1634 satoshis
-    const btcPrice = satoshiPrice / 1e9;        // Convert to BTC using 9 decimals
-    const usdPrice = (btcPrice * btcPriceData.USD) / 100; // Divide by 100 to get correct decimals
+    // Fix price calculation with safe defaults
+    const satoshiPrice = safeTokenData.price || 0;
+    const btcPrice = satoshiPrice / 1e9;
+    const usdPrice = (btcPrice * btcPriceData.USD) / 100;
 
-    console.log('Price calculation:', {
-      satoshiPrice,      // 1634
-      btcPrice,          // 0.000001634
-      btcUsdPrice: btcPriceData.USD, // 83323
-      rawUsdPrice: btcPrice * btcPriceData.USD, // ~0.136
-      finalUsdPrice: usdPrice // ~0.00136
-    });
-
-    // Add debug logging for BTC price
-    console.log('BTC/USD Price:', btcPriceData.USD);
-
-    // Calculate volume metrics
+    // Calculate volume metrics safely
     const trades = tradesData.data || [];
-    const now = new Date();
-    const last24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-    const last7d = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
+    const volumeMetrics = calculateVolumeMetrics(trades, btcPriceData.USD);
 
-    const trades24h = trades.filter(tx => new Date(tx.time) > last24h);
-    const buyTrades = trades24h.filter(tx => tx.buy);
-    const sellTrades = trades24h.filter(tx => !tx.buy);
-
-    // Calculate BTC volumes
-    const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
-    const buyVolume24h = buyTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
-    const sellVolume24h = sellTrades.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
-
-    // Calculate 7d average
-    const trades7d = trades.filter(tx => {
-      const txTime = new Date(tx.time);
-      return txTime > last7d && txTime <= last24h;
-    });
-    const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
-    const averageDailyVolume = volume7d / 6;
-
-    // Calculate USD values
-    const btcUsdPrice = btcPriceData.USD;
-    const volumeMetrics = {
-      volume24h,
-      averageDailyVolume,
-      tradeCount24h: trades24h.length,
-      buyVolume24h,
-      sellVolume24h,
-      buySellRatio: sellVolume24h > 0 ? buyVolume24h / sellVolume24h : 1,
-      spikeRatio: averageDailyVolume > 0 ? volume24h / averageDailyVolume : 1,
-      // Add USD values
-      volume24hUSD: volume24h * btcUsdPrice,
-      averageDailyVolumeUSD: averageDailyVolume * btcUsdPrice,
-      buyVolumeUSD: buyVolume24h * btcUsdPrice,
-      sellVolumeUSD: sellVolume24h * btcUsdPrice
-    };
-
-    console.log('Volume metrics being sent:', volumeMetrics);
-
-    // Check if the developer has sold their entire position
-    const devHolder = holdersData.data?.find(h => h.user === tokenData.creator);
+    // Check dev holdings safely
+    const devHolder = holdersData.data?.find(h => h.user === safeTokenData.creator);
     const devHoldings = devHolder ? Number(devHolder.balance) : 0;
-    const devPercentage = (devHoldings / Number(tokenData.total_supply)) * 100;
+    const devPercentage = (devHoldings / Number(safeTokenData.total_supply || 1)) * 100;
 
     const dangers = [];
     if (devHoldings === 0) {
       dangers.push('Developer has sold their entire position');
     }
 
-    // Calculate PnL for holders
-    const holderPnL = await calculateHolderPnL(holdersData.data, tradesData.data, {
-      btcPrice: btcPrice,
+    // Calculate PnL safely
+    const holderPnL = await calculateHolderPnL(holdersData.data || [], trades, {
+      btcPrice,
       tokenPrice: btcPrice,
       usdPrice: usdPrice.toFixed(8)
     }, tokenId);
 
-    // Ensure holderPnL is an array
-    if (!Array.isArray(holderPnL)) {
-      console.error('holderPnL is not an array:', holderPnL);
-      holderPnL = [];
-    }
-
-    const top10PnL = holderPnL.slice(0, 10);
+    const top10PnL = Array.isArray(holderPnL) ? holderPnL.slice(0, 10) : [];
 
     const combinedData = {
-      token: tokenData,
+      token: safeTokenData,
       holders: holdersData,
       trades: tradesData,
-      btcUsdPrice,
+      btcUsdPrice: btcPriceData.USD,
       holderGrowth: holderGrowthRate,
       price: {
         btcPrice,
@@ -724,19 +680,46 @@ app.get('/api/token-data/:tokenId', async (req, res) => {
       dangers,
       holderPnL: {
         top10: top10PnL,
-        totalPnL: top10PnL.reduce((sum, h) => sum + h.pnl, 0)
+        totalPnL: top10PnL.reduce((sum, h) => sum + (h.pnl || 0), 0)
       }
     };
 
-    // Cache and send response
-    await writeData(`combined_data_${tokenId}`, combinedData, CACHE_DURATION);
+    // Cache the result
+    await cacheData(`combined_data_${tokenId}`, combinedData, CACHE_DURATION);
 
+    console.log('Successfully processed token data');
     res.json(combinedData);
   } catch (error) {
     console.error('Combined data error:', error);
+    // Return a safe fallback response
     res.status(500).json({
       error: 'Failed to fetch combined data',
-      details: error.message
+      details: error.message,
+      token: {},
+      holders: { data: [] },
+      trades: { data: [] },
+      btcUsdPrice: 0,
+      holderGrowth: 0,
+      price: {
+        btcPrice: 0,
+        tokenPrice: 0,
+        usdPrice: "0.00000000"
+      },
+      volumeMetrics: {
+        volume24h: 0,
+        averageDailyVolume: 0,
+        tradeCount24h: 0,
+        buyVolume24h: 0,
+        sellVolume24h: 0,
+        buySellRatio: 0,
+        spikeRatio: 0,
+        volumeChange: "0.00"
+      },
+      dangers: [],
+      holderPnL: {
+        top10: [],
+        totalPnL: 0
+      }
     });
   }
 });
