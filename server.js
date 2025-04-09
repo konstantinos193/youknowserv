@@ -218,17 +218,18 @@ app.get('/api/token/:tokenId/owners', async (req, res) => {
 app.get('/api/token/:tokenId/trades', async (req, res) => {
   try {
     const { tokenId } = req.params;
+    const { page = 1, limit = 100 } = req.query; // Default to 100 trades per page
 
     // Check cache first
-    const cacheKey = `trades_${tokenId}`;
+    const cacheKey = `trades_${tokenId}_${page}_${limit}`;
     const { data: cachedTrades } = await getCachedData(cacheKey, CACHE_DURATION) || {};
 
     if (cachedTrades) {
       return res.json(cachedTrades);
     }
 
-    // Fetch from Odin API
-    const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`, {
+    // Fetch from Odin API with pagination
+    const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=${page}&limit=${limit}`, {
       headers: {
         ...API_HEADERS,
         'User-Agent': getRandomUserAgent(),
