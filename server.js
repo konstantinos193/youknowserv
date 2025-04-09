@@ -1953,8 +1953,6 @@ const MAX_CONCURRENT_REQUESTS = 3; // Limit concurrent API calls
     // Check cache first
     const { data: cachedTokens } = await getCachedData('all_tokens_cache', TOKEN_CACHE_DURATION);
 
-// Remove the duplicate declarations around line 971 and 2170
-
 async function checkCache(key) {
   try {
     const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
@@ -1974,14 +1972,6 @@ async function getExpiredCache(key) {
   } catch (error) {
     console.error('Error getting expired cache:', error);
     return null;
-  }
-}
-
-async function cacheData(key, data) {
-  try {
-    await writeData(key, data, CACHE_DURATION);
-  } catch (error) {
-    console.error('Error caching data:', error);
   }
 }
 
