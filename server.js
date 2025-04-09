@@ -179,10 +179,11 @@ app.get('/api/token/:tokenId', async (req, res) => {
     const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
     // Fetch all required data in parallel
-    const [tokenData, tradesData, btcPriceData] = await Promise.all([
+    const [tokenData, tradesData, btcPriceData, holdersData] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999&after=${twentyFourHoursAgo}`),
-      fetch('https://mempool.space/api/v1/prices').then(res => res.json())
+      fetch('https://mempool.space/api/v1/prices').then(res => res.json()),
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`)
     ]);
     
     // If no data is returned, send a 404 response
@@ -192,6 +193,11 @@ app.get('/api/token/:tokenId', async (req, res) => {
         message: `No data found for token ID: ${tokenId}`
       });
     }
+
+    // Get actual holder count from holders data
+    const activeHolders = holdersData?.data?.filter(h => Number(h.balance) > 0) || [];
+    const actualHolderCount = activeHolders.length;
+    console.log(`Found ${actualHolderCount} active holders out of ${holdersData?.data?.length || 0} total holders`);
 
     // Calculate volume metrics only if we have trades
     let volumeMetrics = {
@@ -209,10 +215,12 @@ app.get('/api/token/:tokenId', async (req, res) => {
       volumeMetrics = calculateVolumeMetrics(tradesData.data, btcPriceData.USD);
     }
 
-    // Add volume metrics to token data
+    // Add volume metrics and correct holder count to token data
     const enrichedTokenData = {
       ...tokenData,
-      volumeMetrics
+      holder_count: actualHolderCount,  // Use the actual count from active holders
+      volumeMetrics,
+      isRugged: actualHolderCount === 0  // Add isRugged flag based on active holders
     };
 
     // Update both caches
@@ -222,7 +230,12 @@ app.get('/api/token/:tokenId', async (req, res) => {
       timestamp: Date.now()
     });
 
-    console.log('Sending fresh token data with volume metrics');
+    console.log('Sending fresh token data:', {
+      holder_count: actualHolderCount,
+      isRugged: actualHolderCount === 0,
+      volume24h: volumeMetrics.volume24h
+    });
+    
     res.json(enrichedTokenData);
   } catch (error) {
     console.error('Token fetch error:', error);
@@ -2508,16 +2521,23 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
       return res.json({ data: [] });
     }
 
+    // Filter out holders with zero balance
+    const activeHolders = holdersResponse.data.filter(h => Number(h.balance) > 0);
+    console.log(`Found ${activeHolders.length} active holders out of ${holdersResponse.data.length} total`);
+    
+    if (activeHolders.length === 0) {
+      console.log('Token has no active holders');
+      return res.json({ data: [] });
+    }
+
     const btcUsdPrice = btcPriceResponse.ok ? (await btcPriceResponse.json()).USD : 0;
     const tokenData = tokenResponse;
     const currentPriceBTC = Number(tokenData.price) / 1e8; // Convert from satoshis to BTC
     const currentPriceUSD = currentPriceBTC * btcUsdPrice;
 
-    console.log('Current token price:', { btc: currentPriceBTC, usd: currentPriceUSD });
-
-    // Process holders in parallel with rate limiting
+    // Process only active holders
     const holdersWithPnL = await Promise.all(
-      holdersResponse.data.map(async (holder) => {
+      activeHolders.map(async (holder) => {
         try {
           // Check holder cache first
           const holderCacheKey = `holder_pnl_${holder.user}_${tokenId}`;
