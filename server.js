@@ -202,7 +202,6 @@ app.get('/api/token/:tokenId', async (req, res) => {
     };
 
     if (tradesData?.data?.length > 0) {
-      // No need to filter trades since we're already getting 24h data from API
       volumeMetrics = calculateVolumeMetrics(tradesData.data);
     }
 
@@ -867,10 +866,10 @@ const calculateVolumeMetrics = (trades) => {
 
   const trades24h = trades.filter(tx => new Date(tx.time) > last24h);
   
-  // Calculate total 24h volume
+  // Calculate total 24h volume in BTC
   const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
-  // Calculate buy and sell volumes
+  // Calculate buy and sell volumes in BTC
   const buyVolume24h = trades24h
     .filter(tx => tx.buy)
     .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
@@ -890,13 +889,16 @@ const calculateVolumeMetrics = (trades) => {
   const volume7d = trades7d.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
   const averageDailyVolume = volume7d / 6;
 
+  // Calculate volume change percentage
+  const volumeChange = averageDailyVolume > 0 
+    ? ((volume24h - averageDailyVolume) / averageDailyVolume * 100).toFixed(2)
+    : '0.00';
+
   return {
     spikeRatio: averageDailyVolume > 0 ? volume24h / averageDailyVolume : 1,
     volume24h,
     averageDailyVolume,
-    volumeChange: averageDailyVolume > 0 
-      ? ((volume24h - averageDailyVolume) / averageDailyVolume * 100).toFixed(2)
-      : '0.00',
+    volumeChange,
     tradeCount24h: trades24h.length,
     buyVolume24h,
     sellVolume24h,
