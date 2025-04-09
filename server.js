@@ -1957,22 +1957,29 @@ const MAX_CONCURRENT_REQUESTS = 3; // Limit concurrent API calls
 // setInterval(checkForNewTokens, NEW_TOKEN_POLL_INTERVAL);
 
     // Check cache first
-    const cachedResult = await getCachedData('all_tokens_cache', TOKEN_CACHE_DURATION);
-    if (cachedResult && cachedResult.data) {
-      return res.json(cachedResult.data);
-    }
-
-    // Single API call to get tokens with all needed data
-    const { sort = 'created_time:desc', page = '1', limit = '20' } = req.query;
-    const data = await fetchOdinAPI('/tokens', { sort, page, limit });
-
-    res.json(data);
-  } catch (error) {
-    console.error('Tokens fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch tokens' });
-  }
-});
-
+    app.get('/api/tokens', async (req, res) => {
+      try {
+        // Check cache first
+        const cachedResult = await getCachedData('all_tokens_cache', TOKEN_CACHE_DURATION);
+        if (cachedResult) {
+          console.log('Returning cached tokens');
+          return res.json(cachedResult);
+        }
+    
+        console.log('No valid cache found, fetching from API');
+        // Single API call to get tokens with all needed data
+        const { sort = 'created_time:desc', page = '1', limit = '20' } = req.query;
+        const data = await fetchOdinAPI('/tokens', { sort, page, limit });
+    
+        // Cache the new data
+        await cacheData('all_tokens_cache', data, TOKEN_CACHE_DURATION);
+    
+        res.json(data);
+      } catch (error) {
+        console.error('Tokens fetch error:', error);
+        res.status(500).json({ error: 'Failed to fetch tokens' });
+      }
+    });
 // ... existing code ...
 
 // Add this helper function for fetching with timeout
