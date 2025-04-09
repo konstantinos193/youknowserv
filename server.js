@@ -3,20 +3,14 @@ process.noDeprecation = true;
 
 import express from 'express';
 import cors from 'cors';
-import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import fetch from 'node-fetch';
+import { readData, writeData, cacheData, getCachedData } from './localStorage.js';
 
 // Initialize environment variables
 dotenv.config();
-
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
 
 // Cache and batch processing constants
 const CACHE_DURATION = 30000; // 30 seconds
@@ -136,15 +130,26 @@ const fetchWithHeaders = async (url, retryCount = 0, maxRetries = 5) => {
 app.get('/api/token/:tokenId', async (req, res) => {
   try {
     const { tokenId } = req.params;
-    console.log(`Fetching token data for: ${tokenId}`); // Log the token ID being fetched
-    const data = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
-    if (!data) {
-      console.error('Failed to fetch token data'); // Log if data is null
-      return res.status(500).json({ error: 'Failed to fetch token data' });
+    console.log(`Fetching token data for: ${tokenId}`);
+    
+    // Check cache first
+    const { data: cachedData } = await getCachedData('tokens', tokenId, CACHE_DURATION);
+    if (cachedData) {
+      return res.json(cachedData);
     }
+
+    // Fetch from Odin API using the new client
+    const data = await odinApi.getToken(tokenId);
+    if (!data) {
+      throw new Error('Failed to fetch token data');
+    }
+
+    // Cache the response
+    await cacheData('tokens', tokenId, data, CACHE_DURATION);
+
     res.json(data);
   } catch (error) {
-    console.error('Token fetch error:', error); // Log the error
+    console.error('Token fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch token data' });
   }
 });
@@ -157,15 +162,10 @@ app.get('/api/token/:tokenId/owners', async (req, res) => {
 
     // Check cache first
     const cacheKey = `holders_${tokenId}_all`;
-    const { data: cachedData } = await supabase
-      .from('holders_cache')
-      .select('*')
-      .eq('cache_key', cacheKey)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString())
-      .single();
+    const { data: cachedData } = await getCachedData('holders', cacheKey, CACHE_DURATION);
 
     if (cachedData) {
-      return res.json(cachedData.data);
+      return res.json(cachedData);
     }
 
     // Fetch all pages from Odin API in parallel
@@ -175,19 +175,12 @@ app.get('/api/token/:tokenId/owners', async (req, res) => {
 
     while (hasMore) {
       const fetchPromises = [];
-      for (let i = 0; i < 5; i++) { // Fetch 5 pages at a time
-        fetchPromises.push(
-          fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=${currentPage + i}&limit=${PAGE_SIZE}`, {
-            headers: API_HEADERS,
-            method: 'GET'
-          })
-        );
+      for (let i = 0; i < 5; i++) {
+        fetchPromises.push(odinApi.getTokenHolders(tokenId, currentPage + i, PAGE_SIZE));
       }
 
-      const responses = await Promise.all(fetchPromises);
-      const dataPromises = responses.map(response => response.json());
-      const pagesData = await Promise.all(dataPromises);
-
+      const pagesData = await Promise.all(fetchPromises);
+      
       pagesData.forEach(data => {
         if (data.data && data.data.length > 0) {
           allHolders = [...allHolders, ...data.data];
@@ -202,13 +195,7 @@ app.get('/api/token/:tokenId/owners', async (req, res) => {
     console.log(`Total holders fetched for ${tokenId}: ${allHolders.length}`);
 
     // Cache the response
-    await supabase
-      .from('holders_cache')
-      .upsert({
-        cache_key: cacheKey,
-        data: { data: allHolders },
-        updated_at: new Date().toISOString()
-      });
+    await cacheData('holders', cacheKey, { data: allHolders }, CACHE_DURATION);
 
     res.json({ data: allHolders });
   } catch (error) {
@@ -222,46 +209,18 @@ app.get('/api/token/:tokenId/trades', async (req, res) => {
   try {
     const { tokenId } = req.params;
 
-    // Check Supabase first
-    const { data: cachedTrades, error: cacheError } = await supabase
-      .from('trades')
-      .select('data')
-      .eq('token_id', tokenId)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString())
-      .single();
+    // Check cache first
+    const { data: cachedTrades } = await getCachedData('trades', tokenId, CACHE_DURATION);
 
     if (cachedTrades) {
-      return res.json(cachedTrades.data);
+      return res.json(cachedTrades);
     }
 
-    const response = await fetch(
-      `https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`,
-      {
-        headers: {
-          ...API_HEADERS,
-          'User-Agent': getRandomUserAgent(),
-        },
-      }
-    );
+    // Fetch from Odin API using the new client
+    const data = await odinApi.getTokenTrades(tokenId);
 
-    if (!response.ok) {
-      throw new Error(`API response not ok: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    // Save to Supabase
-    const { error: upsertError } = await supabase
-      .from('trades')
-      .upsert({
-        token_id: tokenId,
-        data: data,
-        updated_at: new Date().toISOString()
-      });
-
-    if (upsertError) {
-      console.error('Supabase upsert error:', upsertError);
-    }
+    // Cache the response
+    await cacheData('trades', tokenId, data, CACHE_DURATION);
 
     res.json(data);
   } catch (error) {
@@ -275,43 +234,18 @@ app.get('/api/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
 
-    // Check Supabase first
-    const { data: cachedUser, error: cacheError } = await supabase
-      .from('users')
-      .select('data')
-      .eq('id', userId)
-      .gt('updated_at', new Date(Date.now() - 300000).toISOString())
-      .single();
+    // Check cache first
+    const { data: cachedUser } = await getCachedData('users', userId, CACHE_DURATION);
 
     if (cachedUser) {
-      return res.json(cachedUser.data);
+      return res.json(cachedUser);
     }
 
-    const response = await fetch(`https://api.odin.fun/v1/user/${userId}`, {
-      headers: {
-        ...API_HEADERS,
-        'User-Agent': getRandomUserAgent(),
-      },
-    });
+    // Fetch from Odin API using the new client
+    const data = await odinApi.getUser(userId);
 
-    if (!response.ok) {
-      throw new Error(`API response not ok: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    // Save to Supabase
-    const { error: upsertError } = await supabase
-      .from('users')
-      .upsert({
-        id: userId,
-        data: data,
-        updated_at: new Date().toISOString()
-      });
-
-    if (upsertError) {
-      console.error('Supabase upsert error:', upsertError);
-    }
+    // Cache the response
+    await cacheData('users', userId, data, CACHE_DURATION);
 
     res.json(data);
   } catch (error) {
@@ -327,12 +261,7 @@ app.get('/api/price', async (req, res) => {
     console.log(`Fetching price for token: ${tokenId}`);
 
     // Check Supabase cache first
-    const { data: cachedPrice, error: cacheError } = await supabase
-      .from('prices')
-      .select('data')
-      .eq('token_id', tokenId)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString())
-      .single();
+    const { data: cachedPrice, error: cacheError } = await getCachedData(`prices_${tokenId}`, CACHE_DURATION);
 
     if (cachedPrice) {
       return res.json(cachedPrice.data);
@@ -364,13 +293,7 @@ app.get('/api/price', async (req, res) => {
     };
 
     // Save to Supabase
-    const { error: upsertError } = await supabase
-      .from('prices')
-      .upsert({
-        token_id: tokenId,
-        data: priceData,
-        updated_at: new Date().toISOString()
-      });
+    const { error: upsertError } = await writeData(`prices_${tokenId}`, priceData, CACHE_DURATION);
 
     if (upsertError) {
       console.error('Supabase upsert error:', upsertError);
@@ -401,12 +324,7 @@ app.get('/api/user/:userId/created', async (req, res) => {
     const cacheKey = `user_created_${userId}`;
 
     // Check Supabase cache first
-    const { data: cachedData } = await supabase
-      .from('user_created_cache')
-      .select('data')
-      .eq('user_id', userId)
-      .gt('updated_at', new Date(Date.now() - USER_CREATED_CACHE_DURATION).toISOString())
-      .single();
+    const { data: cachedData } = await getCachedData(cacheKey, USER_CREATED_CACHE_DURATION);
 
     if (cachedData) {
       return res.json(cachedData.data);
@@ -420,13 +338,7 @@ app.get('/api/user/:userId/created', async (req, res) => {
     });
 
     // Save to Supabase cache
-    await supabase
-      .from('user_created_cache')
-      .upsert({
-        user_id: userId,
-        data: data,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(cacheKey, data, USER_CREATED_CACHE_DURATION);
 
     res.json(data);
   } catch (error) {
@@ -451,12 +363,7 @@ app.get('/api/user/:userId/tokens', async (req, res) => {
     const { userId } = req.params;
     
     // Check Supabase cache first
-    const { data: cachedHoldings, error: cacheError } = await supabase
-      .from('user_holdings')
-      .select('data')
-      .eq('user_id', userId)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString())
-      .single();
+    const { data: cachedHoldings, error: cacheError } = await getCachedData(`user_holdings_${userId}`, CACHE_DURATION);
 
     if (cachedHoldings) {
       return res.json(cachedHoldings.data);
@@ -480,13 +387,7 @@ app.get('/api/user/:userId/tokens', async (req, res) => {
     const data = await response.json();
 
     // Save to Supabase
-    const { error: upsertError } = await supabase
-      .from('user_holdings')
-      .upsert({
-        user_id: userId,
-        data: data,
-        updated_at: new Date().toISOString()
-      });
+    const { error: upsertError } = await writeData(`user_holdings_${userId}`, data, CACHE_DURATION);
 
     if (upsertError) {
       console.error('Supabase upsert error:', upsertError);
@@ -514,26 +415,14 @@ app.get('/api/token-data/:tokenId', async (req, res) => {
     console.log(`Processing token data for: ${tokenId}`);
     
     // Check cache first
-    const { data: cachedData } = await supabase
-      .from('combined_data')
-      .select('*')
-      .eq('token_id', tokenId)
-      .gt('updated_at', new Date(Date.now() - 5000).toISOString())
-      .single();
+    const { data: cachedData } = await getCachedData(`combined_data_${tokenId}`, 5000);
 
     if (cachedData) {
       return res.json(cachedData.data);
     }
 
     // Get previous holder count for growth calculation
-    const { data: previousData } = await supabase
-      .from('combined_data')
-      .select('data')
-      .eq('token_id', tokenId)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .single();
-
+    const { data: previousData } = await getCachedData(`combined_data_${tokenId}`, 5000);
     const previousHolderCount = previousData?.data?.token?.holder_count || 0;
 
     // Fetch all data in parallel
@@ -695,11 +584,7 @@ app.get('/api/token-data/:tokenId', async (req, res) => {
     };
 
     // Cache and send response
-    await supabase.from('combined_data').upsert({
-      token_id: tokenId,
-      data: combinedData,
-      updated_at: new Date().toISOString()
-    });
+    await writeData(`combined_data_${tokenId}`, combinedData, CACHE_DURATION);
 
     res.json(combinedData);
   } catch (error) {
@@ -845,11 +730,7 @@ app.get('/api/token-analysis/:tokenId', async (req, res) => {
       };
 
       // Cache and send response
-      await supabase.from('token_analysis').upsert({
-        token_id: tokenId,
-        data: analysis,
-        updated_at: new Date().toISOString()
-      });
+      await writeData(`token_analysis_${tokenId}`, analysis, CACHE_DURATION);
 
       res.json(analysis);
     } else {
@@ -1031,12 +912,7 @@ app.get('/tokens', async (req, res) => {
     const cacheKey = `tokens_${sort}_${page}_${limit}`;
 
     // Check Supabase cache first
-    const { data: cachedTokens } = await supabase
-      .from('tokens_cache')
-      .select('data')
-      .eq('cache_key', cacheKey)
-      .gt('updated_at', new Date(Date.now() - CACHE_DURATIONS.TOKENS).toISOString())
-      .single();
+    const { data: cachedTokens } = await getCachedData(cacheKey, CACHE_DURATIONS.TOKENS);
 
     if (cachedTokens) {
       return res.json(cachedTokens.data);
@@ -1054,13 +930,7 @@ app.get('/tokens', async (req, res) => {
     }));
 
     // Save to Supabase cache
-    await supabase
-      .from('tokens_cache')
-      .upsert({
-        cache_key: cacheKey,
-        data: data,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(cacheKey, data, CACHE_DURATIONS.TOKENS);
 
     res.json(data);
   } catch (error) {
@@ -1101,11 +971,7 @@ app.get('/api/batch-tokens', async (req, res) => {
     const tokenPromises = parsedTokenIds.map(async (tokenId) => {
       try {
         // Check cache first
-        const { data: cachedToken } = await supabase
-          .from('tokens')
-          .select('*')
-          .eq('id', tokenId)
-          .single();
+        const { data: cachedToken } = await getCachedData(`tokens_${tokenId}`, CACHE_DURATIONS.TOKENS);
 
         let tokenData;
         let tradesData;
@@ -1169,13 +1035,7 @@ app.get('/api/batch-tokens', async (req, res) => {
         };
 
         // Cache the enriched token data
-        await supabase
-          .from('tokens')
-          .upsert({
-            id: tokenId,
-            data: enrichedTokenData,
-            updated_at: new Date().toISOString()
-          });
+        await cacheData(`tokens_${tokenId}`, enrichedTokenData, CACHE_DURATIONS.TOKENS);
 
         return enrichedTokenData;
       } catch (error) {
@@ -1212,11 +1072,7 @@ app.get('/api/batch-user-created', async (req, res) => {
     }
 
     // Check Supabase cache first
-    const { data: cachedUsers } = await supabase
-      .from('user_created_cache')
-      .select('user_id, data')
-      .in('user_id', userIds)
-      .gt('updated_at', new Date(Date.now() - CACHE_DURATIONS.USER_DATA).toISOString());
+    const { data: cachedUsers } = await getCachedData(`user_created_cache_${userIds}`, CACHE_DURATIONS.USER_DATA);
 
     const cachedMap = new Map(cachedUsers?.map(u => [u.user_id, u.data]) || []);
 
@@ -1235,13 +1091,11 @@ app.get('/api/batch-user-created', async (req, res) => {
     // Cache new data
     const validFetched = fetchedUsers.filter(u => u !== null);
     if (validFetched.length > 0) {
-      await supabase
-        .from('user_created_cache')
-        .upsert(validFetched.map(({ id, data }) => ({
-          user_id: id,
-          data: data,
-          updated_at: new Date().toISOString()
-        })));
+      await cacheData(`user_created_cache_${userIds}`, validFetched.map(({ id, data }) => ({
+        user_id: id,
+        data: data,
+        updated_at: new Date().toISOString()
+      })), CACHE_DURATIONS.USER_DATA);
     }
 
     // Combine cached and fetched data
@@ -1350,12 +1204,7 @@ app.get('/api/user/:userId/activity', async (req, res) => {
 
     // Check cache first
     const cacheKey = `user_activity_${userId}_${page}_${limit}_${sort}`;
-    const { data: cachedData } = await supabase
-      .from('user_activity_cache')
-      .select('data')
-      .eq('cache_key', cacheKey)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString()) // 30 second cache
-      .single();
+    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
 
     if (cachedData) {
       return res.json(cachedData.data);
@@ -1379,13 +1228,7 @@ app.get('/api/user/:userId/activity', async (req, res) => {
     const data = await response.json();
 
     // Cache the response
-    await supabase
-      .from('user_activity_cache')
-      .upsert({
-        cache_key: cacheKey,
-        data: data,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(cacheKey, data, CACHE_DURATION);
 
     res.json(data);
   } catch (error) {
@@ -1451,13 +1294,7 @@ const calculateHolderPnL = async (holders, trades, currentPrice, tokenId) => {
     // First check if current price is valid
     if (Number(currentPrice.usdPrice) <= 0) {
       // Try to get last valid price from Supabase
-      const { data: lastValidPrice } = await supabase
-        .from('valid_prices')
-        .select('*')
-        .eq('token_id', tokenId)
-        .order('updated_at', { ascending: false })
-        .limit(1)
-        .single();
+      const { data: lastValidPrice } = await getCachedData(`valid_prices_${tokenId}`, CACHE_DURATION);
 
       if (lastValidPrice) {
         currentPrice = lastValidPrice.price_data;
@@ -1467,13 +1304,11 @@ const calculateHolderPnL = async (holders, trades, currentPrice, tokenId) => {
       }
     } else {
       // If price is valid, cache it
-      await supabase
-        .from('valid_prices')
-        .upsert({
-          token_id: tokenId,
-          price_data: currentPrice,
-          updated_at: new Date().toISOString()
-        });
+      await cacheData(`valid_prices_${tokenId}`, {
+        token_id: tokenId,
+        price_data: currentPrice,
+        updated_at: new Date().toISOString()
+      }, CACHE_DURATION);
     }
 
     const pnlResults = [];
@@ -1488,12 +1323,7 @@ const calculateHolderPnL = async (holders, trades, currentPrice, tokenId) => {
 
     for (const holder of top10Holders) {
       // Check cache first
-      const { data: cachedHolder } = await supabase
-        .from('holder_pnl_cache')
-        .select('*')
-        .eq('holder_id', holder.user)
-        .eq('token_id', tokenId)
-        .single();
+      const { data: cachedHolder } = await getCachedData(`holder_pnl_cache_${holder.user}_${tokenId}`, CACHE_DURATION);
 
       let avgBuyPriceUSD = cachedHolder?.data?.avgBuyPriceUSD || 0;
 
@@ -1557,16 +1387,14 @@ const calculateHolderPnL = async (holders, trades, currentPrice, tokenId) => {
         avgBuyPriceUSD = avgBuyPriceUSD / 1e3;
 
         // Cache the result
-        await supabase
-          .from('holder_pnl_cache')
-          .upsert({
-            holder_id: holder.user,
-            token_id: tokenId,
-            data: {
-              avgBuyPriceUSD,
-              lastUpdated: new Date().toISOString()
-            }
-          });
+        await cacheData(`holder_pnl_cache_${holder.user}_${tokenId}`, {
+          holder_id: holder.user,
+          token_id: tokenId,
+          data: {
+            avgBuyPriceUSD,
+            lastUpdated: new Date().toISOString()
+          }
+        }, CACHE_DURATION);
       }
 
       // Calculate current value in USD
@@ -1653,12 +1481,7 @@ app.get('/api/whale-activity/:tokenId', async (req, res) => {
     
     // Check cache first with a longer duration since whale activity doesn't change that frequently
     const cacheKey = `whale_activity_${tokenId}`;
-    const { data: cachedData } = await supabase
-      .from('whale_activity_cache')
-      .select('*')
-      .eq('token_id', tokenId)
-      .gt('updated_at', new Date(Date.now() - 60000).toISOString()) // 1 minute cache
-      .single();
+    const { data: cachedData } = await getCachedData(cacheKey, 60000);
 
     if (cachedData?.data) {
       return res.json(cachedData.data);
@@ -1749,13 +1572,7 @@ app.get('/api/whale-activity/:tokenId', async (req, res) => {
     };
 
     // Cache the result for 1 minute
-    await supabase
-      .from('whale_activity_cache')
-      .upsert({
-        token_id: tokenId,
-        data: response,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(cacheKey, response, 60000);
 
     res.json(response);
   } catch (error) {
@@ -1771,12 +1588,7 @@ app.get('/api/all-tokens', async (req, res) => {
     const cacheKey = `all_tokens_${page}_${limit}`;
     
     // Check cache first with very short duration for frequently accessed pages
-    const { data: cachedData } = await supabase
-      .from('all_tokens_cache')
-      .select('*')
-      .eq('cache_key', cacheKey)
-      .gt('updated_at', new Date(Date.now() - 10000).toISOString()) // 10 second cache
-      .single();
+    const { data: cachedData } = await getCachedData(cacheKey, 10000);
 
     if (cachedData?.data) {
       return res.json(cachedData.data);
@@ -1832,26 +1644,14 @@ app.get('/api/all-tokens', async (req, res) => {
     };
     
     // Cache the results
-    await supabase
-      .from('all_tokens_cache')
-      .upsert({
-        cache_key: cacheKey,
-        data: result,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(cacheKey, result, 10000);
     
     res.json(result);
   } catch (error) {
     console.error('Error in /api/all-tokens:', error.message);
     
     // Try to return expired cache if available
-    const { data: expiredData } = await supabase
-      .from('all_tokens_cache')
-      .select('*')
-      .eq('cache_key', cacheKey)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .single();
+    const { data: expiredData } = await getCachedData(cacheKey, 10000);
 
     if (expiredData?.data) {
       return res.json(expiredData.data);
@@ -1871,12 +1671,7 @@ app.get('/api/token-metrics/:tokenId', async (req, res) => {
     const cacheKey = `token_metrics_${tokenId}`;
 
     // Check cache
-    const { data: cachedMetrics } = await supabase
-      .from('token_metrics_cache')
-      .select('*')
-      .eq('cache_key', cacheKey)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString())
-      .single();
+    const { data: cachedMetrics } = await getCachedData(cacheKey, CACHE_DURATION);
 
     if (cachedMetrics?.data) {
       return res.json(cachedMetrics.data);
@@ -1897,13 +1692,7 @@ app.get('/api/token-metrics/:tokenId', async (req, res) => {
     };
 
     // Cache metrics
-    await supabase
-      .from('token_metrics_cache')
-      .upsert({
-        cache_key: cacheKey,
-        data: metrics,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(cacheKey, metrics, CACHE_DURATION);
 
     res.json(metrics);
   } catch (error) {
@@ -1936,12 +1725,7 @@ app.get('/api/holder/:holderId/pnl', async (req, res) => {
 const calculatePnLForHolder = async (holderId, tokenId) => {
   try {
     // Check cache first
-    const { data: cachedHolder } = await supabase
-      .from('holder_pnl_cache')
-      .select('*')
-      .eq('holder_id', holderId)
-      .eq('token_id', tokenId)
-      .single();
+    const { data: cachedHolder } = await getCachedData(`holder_pnl_cache_${holderId}_${tokenId}`, CACHE_DURATION);
 
     if (cachedHolder?.data?.pnl) {
       console.log('Using cached PnL data for holder:', holderId);
@@ -2006,17 +1790,15 @@ const calculatePnLForHolder = async (holderId, tokenId) => {
     const pnlUSD = currentValueUSD - costBasisUSD;
 
     // Cache the result
-    await supabase
-      .from('holder_pnl_cache')
-      .upsert({
-        holder_id: holderId,
-        token_id: tokenId,
-        data: {
-          pnl: pnlUSD,
-          avgBuyPriceUSD,
-          lastUpdated: new Date().toISOString()
-        }
-      });
+    await cacheData(`holder_pnl_cache_${holderId}_${tokenId}`, {
+      holder_id: holderId,
+      token_id: tokenId,
+      data: {
+        pnl: pnlUSD,
+        avgBuyPriceUSD,
+        lastUpdated: new Date().toISOString()
+      }
+    }, CACHE_DURATION);
 
     return pnlUSD;
 
@@ -2034,12 +1816,7 @@ app.get('/api/token/:tokenId/metrics', async (req, res) => {
     const { tokenId } = req.params;
     
     // Check cache first
-    const { data: cachedMetrics } = await supabase
-      .from('token_metrics_cache')
-      .select('*')
-      .eq('token_id', tokenId)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString()) // 30 second cache
-      .single();
+    const { data: cachedMetrics } = await getCachedData(`token_metrics_cache_${tokenId}`, CACHE_DURATION);
 
     if (cachedMetrics) {
       return res.json(cachedMetrics.data);
@@ -2098,13 +1875,7 @@ app.get('/api/token/:tokenId/metrics', async (req, res) => {
     };
 
     // Cache the metrics
-    await supabase
-      .from('token_metrics_cache')
-      .upsert({
-        token_id: tokenId,
-        data: metrics,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(`token_metrics_cache_${tokenId}`, metrics, CACHE_DURATION);
 
     res.json(metrics);
   } catch (error) {
@@ -2180,22 +1951,13 @@ const MAX_CONCURRENT_REQUESTS = 3; // Limit concurrent API calls
 // setInterval(checkForNewTokens, NEW_TOKEN_POLL_INTERVAL);
 
     // Check cache first
-    const { data: cachedTokens } = await supabase
-      .from('all_tokens_cache')
-      .select('*')
-      .gt('updated_at', new Date(Date.now() - TOKEN_CACHE_DURATION).toISOString())
-      .single();
+    const { data: cachedTokens } = await getCachedData('all_tokens_cache', TOKEN_CACHE_DURATION);
 
 // Remove the duplicate declarations around line 971 and 2170
 
 async function checkCache(key) {
   try {
-    const { data: cachedData } = await supabase
-      .from('api_cache')
-      .select('*')
-      .eq('cache_key', key)
-      .gt('updated_at', new Date(Date.now() - CACHE_DURATION).toISOString())
-      .single();
+    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
 
     return cachedData?.data || null;
   } catch (error) {
@@ -2206,11 +1968,7 @@ async function checkCache(key) {
 
 async function getExpiredCache(key) {
   try {
-    const { data: cachedData } = await supabase
-      .from('api_cache')
-      .select('*')
-      .eq('cache_key', key)
-      .single();
+    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
 
     return cachedData?.data || null;
   } catch (error) {
@@ -2221,13 +1979,7 @@ async function getExpiredCache(key) {
 
 async function cacheData(key, data) {
   try {
-    await supabase
-      .from('api_cache')
-      .upsert({
-        cache_key: key,
-        data: data,
-        updated_at: new Date().toISOString()
-      });
+    await writeData(key, data, CACHE_DURATION);
   } catch (error) {
     console.error('Error caching data:', error);
   }
@@ -2330,12 +2082,7 @@ app.get('/api/dashboard/:tokenId', async (req, res) => {
     
     // Check cache first
     const cacheKey = `dashboard_${tokenId}`;
-    const { data: cachedData } = await supabase
-      .from('dashboard_cache')
-      .select('*')
-      .eq('token_id', tokenId)
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString()) // 30 second cache
-      .single();
+    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
 
     if (cachedData?.data) {
       return res.json(cachedData.data);
@@ -2363,13 +2110,7 @@ app.get('/api/dashboard/:tokenId', async (req, res) => {
     };
 
     // Cache the result
-    await supabase
-      .from('dashboard_cache')
-      .upsert({
-        token_id: tokenId,
-        data: dashboardData,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData(cacheKey, dashboardData, CACHE_DURATION);
 
     res.json(dashboardData);
   } catch (error) {
@@ -2385,11 +2126,7 @@ app.get('/api/dashboard/:tokenId', async (req, res) => {
 app.get('/tokens/trending', async (req, res) => {
   try {
     // Check cache first
-    const { data: cachedTokens } = await supabase
-      .from('trending_tokens_cache')
-      .select('data')
-      .gt('updated_at', new Date(Date.now() - 30000).toISOString()) // 30 second cache
-      .single();
+    const { data: cachedTokens } = await getCachedData('trending_tokens_cache', 30000);
 
     if (cachedTokens?.data) {
       return res.json(cachedTokens.data);
@@ -2422,12 +2159,7 @@ app.get('/tokens/trending', async (req, res) => {
       }));
 
     // Cache the results
-    await supabase
-      .from('trending_tokens_cache')
-      .upsert({
-        data: trendingTokens,
-        updated_at: new Date().toISOString()
-      });
+    await cacheData('trending_tokens_cache', { data: trendingTokens }, 30000);
 
     res.json(trendingTokens);
   } catch (error) {
