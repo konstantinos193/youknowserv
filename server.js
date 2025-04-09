@@ -219,22 +219,38 @@ app.get('/api/token/:tokenId/trades', async (req, res) => {
     const { tokenId } = req.params;
 
     // Check cache first
-    const { data: cachedTrades } = await getCachedData('trades', tokenId, CACHE_DURATION);
+    const cacheKey = `trades_${tokenId}`;
+    const { data: cachedTrades } = await getCachedData(cacheKey, CACHE_DURATION) || {};
 
     if (cachedTrades) {
       return res.json(cachedTrades);
     }
 
-    // Fetch from Odin API using the new client
-    const data = await odinApi.getTokenTrades(tokenId);
+    // Fetch from Odin API
+    const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`, {
+      headers: {
+        ...API_HEADERS,
+        'User-Agent': getRandomUserAgent(),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`API response not ok: ${response.status}`);
+    }
+
+    const data = await response.json();
 
     // Cache the response
-    await cacheData('trades', tokenId, data, CACHE_DURATION);
+    await cacheData(cacheKey, data, CACHE_DURATION);
 
     res.json(data);
   } catch (error) {
     console.error('Trades fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch trading data' });
+    res.status(500).json({ 
+      error: 'Failed to fetch trading data',
+      message: error.message,
+      data: { data: [] } // Return empty array as fallback
+    });
   }
 });
 
