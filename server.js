@@ -37,28 +37,17 @@ app.use(compression());
 const memoryCache = new Map();
 const MEMORY_CACHE_DURATION = 60000; // 1 minute
 
-// Enable CORS for specific origins
+// Enable CORS with proper configuration
 app.use(cors({
-  origin: ['https://odinscan.fun', 'http://localhost:3000'],
+  origin: ['https://odinscan.fun', 'http://localhost:3000', 'https://odinscan.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept', 'Accept-Language', 'Origin', 'Referer'],
+  credentials: true,
+  maxAge: 86400 // Cache preflight requests for 24 hours
 }));
 
-// Add CORS headers to every response
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, Accept, Accept-Language, Origin, Referer');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-  
-  next();
-});
+// Remove the old CORS middleware
+// app.use((req, res, next) => { ... });
 
 app.use(express.json());
 
