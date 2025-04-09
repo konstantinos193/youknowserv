@@ -2465,4 +2465,115 @@ app.get('/api/token-metrics/:tokenId/holder-growth', async (req, res) => {
   }
 });
 
-// ... existing code ...
+// Add this near other endpoints
+app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
+  try {
+    const { tokenId } = req.params;
+    
+    // Check cache first
+    const cacheKey = `holders_pnl_${tokenId}`;
+    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
+
+    if (cachedData) {
+      return res.json(cachedData);
+    }
+
+    // Fetch required data in parallel
+    const [holdersResponse, btcPriceResponse] = await Promise.all([
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`),
+      fetch('https://mempool.space/api/v1/prices')
+    ]);
+
+    if (!holdersResponse?.data) {
+      throw new Error('Failed to fetch holders data');
+    }
+
+    const btcUsdPrice = btcPriceResponse.ok ? (await btcPriceResponse.json()).USD : 0;
+
+    // Process holders in parallel with rate limiting
+    const holdersWithPnL = await Promise.all(
+      holdersResponse.data.map(async (holder) => {
+        try {
+          // Check holder cache first
+          const holderCacheKey = `holder_pnl_${holder.user}_${tokenId}`;
+          const { data: cachedHolder } = await getCachedData(holderCacheKey, CACHE_DURATION);
+          
+          if (cachedHolder) {
+            return {
+              ...holder,
+              pnl: cachedHolder.pnl
+            };
+          }
+
+          // Fetch holder's trades
+          const activityResponse = await fetchWithHeaders(
+            `https://api.odin.fun/v1/user/${holder.user}/activity?page=1&limit=100&sort=time:desc`
+          );
+
+          if (!activityResponse?.data) {
+            return { ...holder, pnl: 0 };
+          }
+
+          // Filter trades for this token
+          const trades = activityResponse.data.filter(trade => trade.token.id === tokenId);
+          
+          let totalCostBTC = 0;
+          let totalTokensBought = 0;
+          let totalReceivedBTC = 0;
+          let totalTokensSold = 0;
+
+          trades.forEach(trade => {
+            if (trade.action === "BUY") {
+              totalCostBTC += Number(trade.amount_btc) / 1e8;
+              totalTokensBought += Number(trade.amount_token) / 1e11;
+            } else if (trade.action === "SELL") {
+              totalReceivedBTC += Number(trade.amount_btc) / 1e8;
+              totalTokensSold += Number(trade.amount_token) / 1e11;
+            }
+          });
+
+          // Calculate average buy price in USD
+          const avgBuyPriceUSD = totalTokensBought > 0 
+            ? (totalCostBTC * btcUsdPrice) / totalTokensBought 
+            : 0;
+
+          // Current holdings in proper units
+          const currentHoldings = Number(holder.balance) / 1e11;
+          
+          // Calculate current value and PnL
+          const currentValueUSD = currentHoldings * avgBuyPriceUSD;
+          const costBasisUSD = currentHoldings * avgBuyPriceUSD;
+          const pnlUSD = currentValueUSD - costBasisUSD;
+
+          // Cache individual holder PnL
+          await cacheData(holderCacheKey, {
+            pnl: pnlUSD,
+            lastUpdated: new Date().toISOString()
+          }, CACHE_DURATION);
+
+          return {
+            ...holder,
+            pnl: pnlUSD
+          };
+        } catch (error) {
+          console.error(`Error processing holder ${holder.user}:`, error);
+          return { ...holder, pnl: 0 };
+        }
+      })
+    );
+
+    // Sort by balance descending
+    const sortedHolders = holdersWithPnL.sort((a, b) => Number(b.balance) - Number(a.balance));
+
+    // Cache the final result
+    await cacheData(cacheKey, sortedHolders, CACHE_DURATION);
+
+    res.json(sortedHolders);
+  } catch (error) {
+    console.error('Holders PnL error:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch holders PnL',
+      message: error.message
+    });
+  }
+});
