@@ -2556,9 +2556,9 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
           const currentHoldings = Number(holder.balance) / 1e11;
           
           // Calculate PnL
-          const costBasisUSD = avgBuyPriceBTC * btcUsdPrice * currentHoldings;
-          const currentValueUSD = currentPriceUSD * currentHoldings;
-          // Calculate PnL in USD (no satoshi conversion needed)
+          // Divide by 1e3 to get the correct scale for USD values
+          const costBasisUSD = (avgBuyPriceBTC * btcUsdPrice * currentHoldings) / 1e3;
+          const currentValueUSD = (currentPriceUSD * currentHoldings) / 1e3;
           const pnlUSD = currentValueUSD - costBasisUSD;
 
           console.log(`PnL calculation for ${holder.user}:`, {
