@@ -175,25 +175,26 @@ app.get('/api/token/:tokenId', async (req, res) => {
       return res.json(cachedData);
     }
 
-    // Calculate timestamp for 24h ago
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
-    // Fetch all required data in parallel
-    const [tokenData, tradesData, btcPriceData, holdersData, creatorTokensResponse] = await Promise.all([
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999&after=${twentyFourHoursAgo}`),
-      fetch('https://mempool.space/api/v1/prices').then(res => res.json()),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`),
-      fetchWithHeaders(`https://api.odin.fun/v1/user/${tokenData?.creator}/created`)
-    ]);
+    // First get the token data
+    const tokenData = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
     
-    // If no data is returned, send a 404 response
     if (!tokenData) {
       return res.status(404).json({ 
         error: 'Token not found',
         message: `No data found for token ID: ${tokenId}`
       });
     }
+
+    // Calculate timestamp for 24h ago
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    // Then fetch all other data in parallel
+    const [tradesData, btcPriceData, holdersData, creatorTokensResponse] = await Promise.all([
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999&after=${twentyFourHoursAgo}`),
+      fetch('https://mempool.space/api/v1/prices').then(res => res.json()),
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`),
+      fetchWithHeaders(`https://api.odin.fun/v1/user/${tokenData.creator}/created`)
+    ]);
 
     // Get actual holder count from holders data
     const activeHolders = holdersData?.data?.filter(h => Number(h.balance) > 0) || [];
