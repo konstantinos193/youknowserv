@@ -1746,13 +1746,13 @@ app.get('/api/all-tokens', async (req, res) => {
       return res.json(cachedData);
     }
 
-    // Single API call to get tokens with all needed data
-    const response = await fetch(`https://api.odin.fun/v1/tokens?page=${page}&limit=${limit}&sort=volume:desc`, {
+    // Fetch all tokens with high limit to get everything
+    const response = await fetch(`https://api.odin.fun/v1/tokens?page=1&limit=99999&sort=volume:desc`, {
       headers: {
         ...API_HEADERS,
         'User-Agent': getRandomUserAgent(),
       },
-      timeout: 5000 // 5 second timeout
+      timeout: 10000 // 10 second timeout
     });
     
     if (!response.ok) {
@@ -1765,7 +1765,7 @@ app.get('/api/all-tokens', async (req, res) => {
       throw new Error('Invalid response format from Odin API');
     }
 
-    // Process all tokens in parallel without additional API calls
+    // Process all tokens
     const processedTokens = data.data.map(token => ({
       id: token.id,
       name: token.name,
@@ -1790,7 +1790,7 @@ app.get('/api/all-tokens', async (req, res) => {
       pagination: {
         currentPage: parseInt(page),
         totalTokens: data.total || processedTokens.length,
-        hasMore: processedTokens.length >= parseInt(limit)
+        hasMore: false // Since we're getting all tokens
       }
     };
     
