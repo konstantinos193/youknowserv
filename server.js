@@ -142,20 +142,24 @@ app.get('/api/token/:tokenId', async (req, res) => {
     console.log(`Fetching token data for: ${tokenId}`);
     
     // Check cache first
-    const { data: cachedData } = await getCachedData('tokens', tokenId, CACHE_DURATION);
+    const cacheKey = `token_${tokenId}`;
+    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
+    
     if (cachedData) {
+      console.log('Returning cached token data');
       return res.json(cachedData);
     }
 
-    // Fetch from Odin API using the new client
-    const data = await odinApi.getToken(tokenId);
+    // Fetch from Odin API using fetchWithHeaders
+    const data = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
     if (!data) {
       throw new Error('Failed to fetch token data');
     }
 
     // Cache the response
-    await cacheData('tokens', tokenId, data, CACHE_DURATION);
+    await cacheData(cacheKey, data, CACHE_DURATION);
 
+    console.log('Sending fresh token data');
     res.json(data);
   } catch (error) {
     console.error('Token fetch error:', error);
