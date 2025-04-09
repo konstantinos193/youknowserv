@@ -2472,10 +2472,11 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
     
     // Check cache first
     const cacheKey = `holders_pnl_${tokenId}`;
-    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
+    const cachedResult = await getCachedData(cacheKey, CACHE_DURATION);
 
-    if (cachedData) {
-      return res.json(cachedData);
+    if (cachedResult?.data) {
+      console.log('Returning cached holders PnL data');
+      return res.json(cachedResult);
     }
 
     // Fetch required data in parallel
@@ -2485,10 +2486,12 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
     ]);
 
     if (!holdersResponse?.data) {
-      throw new Error('Failed to fetch holders data');
+      console.error('No holders data received from Odin API');
+      return res.json({ data: [] });
     }
 
     const btcUsdPrice = btcPriceResponse.ok ? (await btcPriceResponse.json()).USD : 0;
+    console.log('Processing PnL for holders with BTC price:', btcUsdPrice);
 
     // Process holders in parallel with rate limiting
     const holdersWithPnL = await Promise.all(
@@ -2496,12 +2499,13 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
         try {
           // Check holder cache first
           const holderCacheKey = `holder_pnl_${holder.user}_${tokenId}`;
-          const { data: cachedHolder } = await getCachedData(holderCacheKey, CACHE_DURATION);
+          const cachedHolder = await getCachedData(holderCacheKey, CACHE_DURATION);
           
-          if (cachedHolder) {
+          if (cachedHolder?.data?.pnl !== undefined) {
+            console.log(`Using cached PnL for holder ${holder.user}`);
             return {
               ...holder,
-              pnl: cachedHolder.pnl
+              pnl: cachedHolder.data.pnl
             };
           }
 
@@ -2511,11 +2515,13 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
           );
 
           if (!activityResponse?.data) {
+            console.log(`No activity data for holder ${holder.user}`);
             return { ...holder, pnl: 0 };
           }
 
           // Filter trades for this token
           const trades = activityResponse.data.filter(trade => trade.token.id === tokenId);
+          console.log(`Found ${trades.length} trades for holder ${holder.user}`);
           
           let totalCostBTC = 0;
           let totalTokensBought = 0;
@@ -2545,10 +2551,14 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
           const costBasisUSD = currentHoldings * avgBuyPriceUSD;
           const pnlUSD = currentValueUSD - costBasisUSD;
 
+          console.log(`Calculated PnL for holder ${holder.user}:`, pnlUSD);
+
           // Cache individual holder PnL
           await cacheData(holderCacheKey, {
-            pnl: pnlUSD,
-            lastUpdated: new Date().toISOString()
+            data: {
+              pnl: pnlUSD,
+              lastUpdated: new Date().toISOString()
+            }
           }, CACHE_DURATION);
 
           return {
@@ -2564,11 +2574,15 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
 
     // Sort by balance descending
     const sortedHolders = holdersWithPnL.sort((a, b) => Number(b.balance) - Number(a.balance));
+    console.log(`Processed ${sortedHolders.length} holders with PnL`);
+
+    const result = { data: sortedHolders };
 
     // Cache the final result
-    await cacheData(cacheKey, { data: sortedHolders }, CACHE_DURATION);
+    await cacheData(cacheKey, result, CACHE_DURATION);
+    console.log('Cached final holders PnL result');
 
-    res.json({ data: sortedHolders });
+    res.json(result);
   } catch (error) {
     console.error('Holders PnL error:', error);
     res.status(500).json({ 
