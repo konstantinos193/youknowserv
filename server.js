@@ -24,7 +24,7 @@ const port = process.env.PORT || 3001;
 // ... other requires and code ...
 
 // Add compression middleware at the top of the file
-const compression = require('compression');
+import compression from 'compression';
 app.use(compression());
 
 // Add memory cache for frequently accessed tokens
