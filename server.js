@@ -898,15 +898,39 @@ const calculateVolumeMetrics = (trades) => {
     ? ((volume24h - averageDailyVolume) / averageDailyVolume * 100).toFixed(2)
     : '0.00';
 
-  return {
-    spikeRatio: averageDailyVolume > 0 ? volume24h / averageDailyVolume : 1,
+  // Get BTC/USD price
+  const btcPriceResponse = await fetch('https://mempool.space/api/v1/prices');
+  const btcPriceData = await btcPriceResponse.json();
+  const btcUsdPrice = btcPriceData.USD;
+
+  // Calculate USD values with correct scaling (divide by 1e3)
+  const volume24hUSD = (volume24h * btcUsdPrice) / 1e3;
+  const averageDailyVolumeUSD = (averageDailyVolume * btcUsdPrice) / 1e3;
+  const buyVolumeUSD = (buyVolume24h * btcUsdPrice) / 1e3;
+  const sellVolumeUSD = (sellVolume24h * btcUsdPrice) / 1e3;
+
+  console.log('Volume metrics:', {
     volume24h,
+    volume24hUSD,
     averageDailyVolume,
-    volumeChange,
+    averageDailyVolumeUSD,
+    buyVolumeUSD,
+    sellVolumeUSD
+  });
+
+  return {
+    volume24h,
+    volume24hUSD,
+    averageDailyVolume,
+    averageDailyVolumeUSD,
     tradeCount24h: trades24h.length,
     buyVolume24h,
+    buyVolumeUSD,
     sellVolume24h,
-    buySellRatio
+    sellVolumeUSD,
+    buySellRatio,
+    spikeRatio: averageDailyVolume > 0 ? volume24h / averageDailyVolume : 1,
+    volumeChange
   };
 };
 
