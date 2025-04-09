@@ -23,6 +23,13 @@ const app = express();
 const port = process.env.PORT || 3001;
 // ... other requires and code ...
 
+// Add compression middleware at the top of the file
+const compression = require('compression');
+app.use(compression());
+
+// Add memory cache for frequently accessed tokens
+const memoryCache = new Map();
+const MEMORY_CACHE_DURATION = 60000; // 1 minute
 
 // Middleware
 app.use(cors({
@@ -142,19 +149,35 @@ app.get('/api/token/:tokenId', async (req, res) => {
     const { tokenId } = req.params;
     console.log(`Fetching token data for: ${tokenId}`);
     
-    // Check cache first
+    // Check memory cache first
+    const memoryCacheKey = `token_${tokenId}`;
+    const memoryCachedData = memoryCache.get(memoryCacheKey);
+    if (memoryCachedData && Date.now() - memoryCachedData.timestamp < MEMORY_CACHE_DURATION) {
+      console.log('Returning memory cached token data');
+      return res.json(memoryCachedData.data);
+    }
+
+    // Check disk cache
     const cacheKey = `token_${tokenId}`;
     const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION) || {};
     
     if (cachedData) {
-      console.log('Returning cached token data');
+      // Update memory cache
+      memoryCache.set(memoryCacheKey, {
+        data: cachedData,
+        timestamp: Date.now()
+      });
+      console.log('Returning disk cached token data');
       return res.json(cachedData);
     }
 
-    // Fetch all required data in parallel
+    // Calculate timestamp for 24h ago
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    // Fetch all required data in parallel with optimized queries
     const [tokenData, tradesData, btcPriceData] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=1000`), // Limit to 1000 trades for performance
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=1000&after=${twentyFourHoursAgo}`),
       fetch('https://mempool.space/api/v1/prices').then(res => res.json())
     ]);
     
@@ -179,15 +202,8 @@ app.get('/api/token/:tokenId', async (req, res) => {
     };
 
     if (tradesData?.data?.length > 0) {
-      // Filter trades from last 24 hours
-      const now = Date.now();
-      const trades24h = tradesData.data.filter(tx => 
-        now - new Date(tx.time).getTime() <= 24 * 60 * 60 * 1000
-      );
-
-      if (trades24h.length > 0) {
-        volumeMetrics = calculateVolumeMetrics(trades24h);
-      }
+      // No need to filter trades since we're already getting 24h data from API
+      volumeMetrics = calculateVolumeMetrics(tradesData.data);
     }
 
     // Add volume metrics to token data
@@ -202,8 +218,12 @@ app.get('/api/token/:tokenId', async (req, res) => {
       }
     };
 
-    // Cache the enriched token data
+    // Update both caches
     await cacheData(cacheKey, enrichedTokenData, CACHE_DURATION);
+    memoryCache.set(memoryCacheKey, {
+      data: enrichedTokenData,
+      timestamp: Date.now()
+    });
 
     console.log('Sending fresh token data with volume metrics');
     res.json(enrichedTokenData);
