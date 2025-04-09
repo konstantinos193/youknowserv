@@ -151,10 +151,11 @@ app.get('/api/token/:tokenId', async (req, res) => {
       return res.json(cachedData);
     }
 
-    // Fetch token data and trades in parallel
-    const [tokenData, tradesData] = await Promise.all([
+    // Fetch all required data in parallel
+    const [tokenData, tradesData, btcPriceData] = await Promise.all([
       fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`)
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=1000`), // Limit to 1000 trades for performance
+      fetch('https://mempool.space/api/v1/prices').then(res => res.json())
     ]);
     
     // If no data is returned, send a 404 response
@@ -165,24 +166,39 @@ app.get('/api/token/:tokenId', async (req, res) => {
       });
     }
 
-    // Calculate volume metrics
-    const trades = tradesData?.data || [];
-    const volumeMetrics = calculateVolumeMetrics(trades);
+    // Calculate volume metrics only if we have trades
+    let volumeMetrics = {
+      volume24h: 0,
+      averageDailyVolume: 0,
+      tradeCount24h: 0,
+      buyVolume24h: 0,
+      sellVolume24h: 0,
+      buySellRatio: 0,
+      spikeRatio: 0,
+      volumeChange: "0.00"
+    };
 
-    // Get BTC/USD price
-    const btcPriceResponse = await fetch('https://mempool.space/api/v1/prices');
-    const btcPriceData = await btcPriceResponse.json();
-    const btcUsdPrice = btcPriceData.USD;
+    if (tradesData?.data?.length > 0) {
+      // Filter trades from last 24 hours
+      const now = Date.now();
+      const trades24h = tradesData.data.filter(tx => 
+        now - new Date(tx.time).getTime() <= 24 * 60 * 60 * 1000
+      );
+
+      if (trades24h.length > 0) {
+        volumeMetrics = calculateVolumeMetrics(trades24h);
+      }
+    }
 
     // Add volume metrics to token data
     const enrichedTokenData = {
       ...tokenData,
       volumeMetrics: {
         ...volumeMetrics,
-        volume24hUSD: volumeMetrics.volume24h * btcUsdPrice,
-        averageDailyVolumeUSD: volumeMetrics.averageDailyVolume * btcUsdPrice,
-        buyVolumeUSD: volumeMetrics.buyVolume24h * btcUsdPrice,
-        sellVolumeUSD: volumeMetrics.sellVolume24h * btcUsdPrice
+        volume24hUSD: volumeMetrics.volume24h * btcPriceData.USD,
+        averageDailyVolumeUSD: volumeMetrics.averageDailyVolume * btcPriceData.USD,
+        buyVolumeUSD: volumeMetrics.buyVolume24h * btcPriceData.USD,
+        sellVolumeUSD: volumeMetrics.sellVolume24h * btcPriceData.USD
       }
     };
 
