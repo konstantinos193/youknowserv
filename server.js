@@ -2566,14 +2566,15 @@ app.get('/api/token/:tokenId/holders-pnl', async (req, res) => {
     const sortedHolders = holdersWithPnL.sort((a, b) => Number(b.balance) - Number(a.balance));
 
     // Cache the final result
-    await cacheData(cacheKey, sortedHolders, CACHE_DURATION);
+    await cacheData(cacheKey, { data: sortedHolders }, CACHE_DURATION);
 
-    res.json(sortedHolders);
+    res.json({ data: sortedHolders });
   } catch (error) {
     console.error('Holders PnL error:', error);
     res.status(500).json({ 
       error: 'Failed to fetch holders PnL',
-      message: error.message
+      message: error.message,
+      data: [] 
     });
   }
 });
