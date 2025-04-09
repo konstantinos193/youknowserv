@@ -38,16 +38,32 @@ const memoryCache = new Map();
 const MEMORY_CACHE_DURATION = 60000; // 1 minute
 
 // Enable CORS with proper configuration
+const allowedOrigins = [
+  'https://odinscan.fun',
+  'http://localhost:3000',
+  'https://odinscan.vercel.app',
+  'http://deape.ddns.net:3001'
+];
+
 app.use(cors({
-  origin: ['https://odinscan.fun', 'http://localhost:3000', 'https://odinscan.vercel.app'],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      console.log('Origin not allowed:', origin);
+      return callback(null, false);
+    }
+    return callback(null, true);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept', 'Accept-Language', 'Origin', 'Referer'],
   credentials: true,
   maxAge: 86400 // Cache preflight requests for 24 hours
 }));
 
-// Remove the old CORS middleware
-// app.use((req, res, next) => { ... });
+// Add OPTIONS handling for preflight requests
+app.options('*', cors());
 
 app.use(express.json());
 
@@ -140,6 +156,12 @@ const fetchWithHeaders = async (url, retryCount = 0, maxRetries = 5) => {
 // Token data endpoint
 app.get('/api/token/:tokenId', async (req, res) => {
   try {
+    // Set CORS headers explicitly for this endpoint
+    res.header('Access-Control-Allow-Origin', 'https://odinscan.fun');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
+
     const { tokenId } = req.params;
     console.log(`Fetching token data for: ${tokenId}`);
     
