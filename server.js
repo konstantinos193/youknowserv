@@ -7,7 +7,8 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import fetch from 'node-fetch';
-import { readData, writeData, cacheData, getCachedData } from './localStorage.js';
+import { readData, writeData, cacheData, getCachedData, deleteCachedData } from './localStorage.js';
+import { cacheData, getCachedData, deleteCachedData } from './cache.js';
 
 // Initialize environment variables
 dotenv.config();
@@ -1628,9 +1629,9 @@ app.get('/api/all-tokens', async (req, res) => {
     const cacheKey = `all_tokens_${page}_${limit}`;
     
     // Check cache first with very short duration for frequently accessed pages
-    const { data: cachedData } = await getCachedData(cacheKey, 10000);
+    const cachedData = await getCachedData(cacheKey, 10000);
 
-    if (cachedData?.data) {
+    if (cachedData) {
       return res.json(cachedData);
     }
 
@@ -1692,7 +1693,7 @@ app.get('/api/all-tokens', async (req, res) => {
     // Try to return expired cache if available
     const { page = '1', limit = '100' } = req.query;
     const cacheKey = `all_tokens_${page}_${limit}`;
-    const { data: expiredData } = await getCachedData(cacheKey, 10000);
+    const expiredData = await getCachedData(cacheKey, 10000);
 
     if (expiredData) {
       return res.json(expiredData);
@@ -2232,9 +2233,8 @@ app.get('/btc-price', async (req, res) => {
 
 async function checkCache(key) {
   try {
-    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
-
-    return cachedData?.data || null;
+    const data = await getCachedData(key, CACHE_DURATION);
+    return data || null;
   } catch (error) {
     console.error('Error checking cache:', error);
     return null;
@@ -2243,9 +2243,8 @@ async function checkCache(key) {
 
 async function getExpiredCache(key) {
   try {
-    const { data: cachedData } = await getCachedData(key, CACHE_DURATION);
-
-    return cachedData?.data || null;
+    const data = await getCachedData(key, CACHE_DURATION);
+    return data || null;
   } catch (error) {
     console.error('Error getting expired cache:', error);
     return null;
