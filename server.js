@@ -151,22 +151,46 @@ app.get('/api/token/:tokenId', async (req, res) => {
       return res.json(cachedData);
     }
 
-    // Fetch from Odin API using fetchWithHeaders
-    const data = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
+    // Fetch token data and trades in parallel
+    const [tokenData, tradesData] = await Promise.all([
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`),
+      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999`)
+    ]);
     
     // If no data is returned, send a 404 response
-    if (!data) {
+    if (!tokenData) {
       return res.status(404).json({ 
         error: 'Token not found',
         message: `No data found for token ID: ${tokenId}`
       });
     }
 
-    // Cache the response
-    await cacheData(cacheKey, data, CACHE_DURATION);
+    // Calculate volume metrics
+    const trades = tradesData?.data || [];
+    const volumeMetrics = calculateVolumeMetrics(trades);
 
-    console.log('Sending fresh token data');
-    res.json(data);
+    // Get BTC/USD price
+    const btcPriceResponse = await fetch('https://mempool.space/api/v1/prices');
+    const btcPriceData = await btcPriceResponse.json();
+    const btcUsdPrice = btcPriceData.USD;
+
+    // Add volume metrics to token data
+    const enrichedTokenData = {
+      ...tokenData,
+      volumeMetrics: {
+        ...volumeMetrics,
+        volume24hUSD: volumeMetrics.volume24h * btcUsdPrice,
+        averageDailyVolumeUSD: volumeMetrics.averageDailyVolume * btcUsdPrice,
+        buyVolumeUSD: volumeMetrics.buyVolume24h * btcUsdPrice,
+        sellVolumeUSD: volumeMetrics.sellVolume24h * btcUsdPrice
+      }
+    };
+
+    // Cache the enriched token data
+    await cacheData(cacheKey, enrichedTokenData, CACHE_DURATION);
+
+    console.log('Sending fresh token data with volume metrics');
+    res.json(enrichedTokenData);
   } catch (error) {
     console.error('Token fetch error:', error);
     res.status(500).json({ 
