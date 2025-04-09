@@ -25,19 +25,28 @@ const port = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors({
-  origin: [
-    'https://odinsherlock.fun',
-    'http://localhost:3000', 
-    'https://odinsmash.com', 
-    'https://www.odinsmash.com', 
-    'https://odin.fun',
-    'http://192.168.1.2:3000' // Added new origin
-  ],
+  origin: '*',  // Allow all origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept', 'Accept-Language', 'Origin', 'Referer'],
   credentials: true,
   optionsSuccessStatus: 200
 }));
+
+// Add CORS headers to every response
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, Accept, Accept-Language, Origin, Referer');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  
+  next();
+});
+
 app.use(express.json());
 
 // API Headers
@@ -867,9 +876,6 @@ const CACHE_DURATIONS = {
   USER_DATA: 120000 // 2 minutes
 };
 
-// Add this near the top of the file
-// const NEW_TOKEN_POLL_INTERVAL = 10000; // 10 seconds
-
 // Add this helper function to check for new tokens
 // const checkForNewTokens = async () => {
 //   try {
@@ -1597,7 +1603,7 @@ app.get('/api/all-tokens', async (req, res) => {
     const { data: cachedData } = await getCachedData(cacheKey, 10000);
 
     if (cachedData?.data) {
-      return res.json(cachedData.data);
+      return res.json(cachedData);
     }
 
     // Single API call to get tokens with all needed data
@@ -1631,7 +1637,6 @@ app.get('/api/all-tokens', async (req, res) => {
       total_supply: token.total_supply || '0',
       holder_count: token.holder_count || 0,
       volume: token.volume || 0,
-      // Add basic metrics without additional API calls
       basicMetrics: {
         volume24h: token.volume || 0,
         price_change_24h: token.price_change_24h || 0,
@@ -1657,10 +1662,12 @@ app.get('/api/all-tokens', async (req, res) => {
     console.error('Error in /api/all-tokens:', error.message);
     
     // Try to return expired cache if available
+    const { page = '1', limit = '100' } = req.query;
+    const cacheKey = `all_tokens_${page}_${limit}`;
     const { data: expiredData } = await getCachedData(cacheKey, 10000);
 
-    if (expiredData?.data) {
-      return res.json(expiredData.data);
+    if (expiredData) {
+      return res.json(expiredData);
     }
     
     res.status(500).json({ 
@@ -2194,21 +2201,6 @@ app.get('/btc-price', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch BTC price' });
   }
 }); 
-
-// Add CORS headers to every response
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, Accept, Accept-Language, Origin, Referer');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-  
-  next();
-});
 
 async function checkCache(key) {
   try {
