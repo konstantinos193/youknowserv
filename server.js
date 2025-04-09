@@ -2972,3 +2972,61 @@ const apiLimiter = rateLimit({
     max: 100, // limit each IP to 100 requests per windowMs
     message: 'Too many requests from this IP, please try again after 15 minutes'
 });
+
+// ... existing code ...
+
+// Add this new endpoint for creator tokens
+app.get('/api/user/:userId/created', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    console.log(`Fetching created tokens for user: ${userId}`);
+
+    // Check cache first
+    const cacheKey = `user_created_${userId}`;
+    const cachedData = await getCachedData(cacheKey, CACHE_DURATION);
+    
+    if (cachedData?.data) {
+      console.log('Returning cached creator tokens');
+      return res.json(cachedData.data);
+    }
+
+    // Fetch from Odin API
+    const response = await fetch(`https://api.odin.fun/v1/user/${userId}/created`, {
+      headers: {
+        ...API_HEADERS,
+        'User-Agent': getRandomUserAgent(),
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch creator tokens: ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    // Process the data to match expected format
+    const processedData = {
+      data: data.data || [],
+      page: data.page || 1,
+      limit: data.limit || 100,
+      count: data.count || 0
+    };
+
+    // Cache the result
+    await cacheData(cacheKey, processedData, CACHE_DURATION);
+
+    console.log(`Found ${processedData.data.length} tokens created by ${userId}`);
+    res.json(processedData);
+  } catch (error) {
+    console.error('Error fetching creator tokens:', error);
+    // Return a valid response even on error
+    res.json({
+      data: [],
+      page: 1,
+      limit: 100,
+      count: 0
+    });
+  }
+});
+
+// ... existing code ...
