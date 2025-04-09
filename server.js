@@ -143,7 +143,7 @@ app.get('/api/token/:tokenId', async (req, res) => {
     
     // Check cache first
     const cacheKey = `token_${tokenId}`;
-    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION);
+    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION) || {};
     
     if (cachedData) {
       console.log('Returning cached token data');
@@ -152,8 +152,13 @@ app.get('/api/token/:tokenId', async (req, res) => {
 
     // Fetch from Odin API using fetchWithHeaders
     const data = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
+    
+    // If no data is returned, send a 404 response
     if (!data) {
-      throw new Error('Failed to fetch token data');
+      return res.status(404).json({ 
+        error: 'Token not found',
+        message: `No data found for token ID: ${tokenId}`
+      });
     }
 
     // Cache the response
@@ -163,11 +168,14 @@ app.get('/api/token/:tokenId', async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error('Token fetch error:', error);
-    res.status(500).json({ error: 'Failed to fetch token data' });
+    res.status(500).json({ 
+      error: 'Failed to fetch token data',
+      message: error.message 
+    });
   }
 });
 
-// Add this endpoint for token holders
+// Add this endpoint for token holders with proper error handling
 app.get('/api/token/:tokenId/owners', async (req, res) => {
   try {
     const { tokenId } = req.params;
@@ -175,45 +183,33 @@ app.get('/api/token/:tokenId/owners', async (req, res) => {
 
     // Check cache first
     const cacheKey = `holders_${tokenId}_all`;
-    const { data: cachedData } = await getCachedData('holders', cacheKey, CACHE_DURATION);
+    const { data: cachedData } = await getCachedData('holders', cacheKey, CACHE_DURATION) || {};
 
     if (cachedData) {
       return res.json(cachedData);
     }
 
-    // Fetch all pages from Odin API in parallel
-    let allHolders = [];
-    let currentPage = 1;
-    let hasMore = true;
-
-    while (hasMore) {
-      const fetchPromises = [];
-      for (let i = 0; i < 5; i++) {
-        fetchPromises.push(odinApi.getTokenHolders(tokenId, currentPage + i, PAGE_SIZE));
-      }
-
-      const pagesData = await Promise.all(fetchPromises);
-      
-      pagesData.forEach(data => {
-        if (data.data && data.data.length > 0) {
-          allHolders = [...allHolders, ...data.data];
-        } else {
-          hasMore = false;
-        }
+    // Fetch from Odin API
+    const response = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=${PAGE_SIZE}`);
+    
+    if (!response) {
+      return res.status(404).json({ 
+        error: 'No holders found',
+        message: `No holder data found for token ID: ${tokenId}`
       });
-
-      currentPage += 5;
     }
 
-    console.log(`Total holders fetched for ${tokenId}: ${allHolders.length}`);
-
     // Cache the response
-    await cacheData('holders', cacheKey, { data: allHolders }, CACHE_DURATION);
+    await cacheData('holders', cacheKey, { data: response.data || [] }, CACHE_DURATION);
 
-    res.json({ data: allHolders });
+    res.json({ data: response.data || [] });
   } catch (error) {
     console.error('Token owners fetch error:', error);
-    res.json({ data: [] });
+    res.status(500).json({ 
+      error: 'Failed to fetch token holders',
+      message: error.message,
+      data: [] 
+    });
   }
 });
 
@@ -267,14 +263,21 @@ app.get('/api/user/:userId', async (req, res) => {
   }
 });
 
-// Update the price endpoint
+// Update the price endpoint with proper error handling
 app.get('/api/price', async (req, res) => {
   try {
     const { tokenId } = req.query;
     console.log(`Fetching price for token: ${tokenId}`);
 
-    // Check Supabase cache first
-    const { data: cachedPrice, error: cacheError } = await getCachedData(`prices_${tokenId}`, CACHE_DURATION);
+    if (!tokenId) {
+      return res.status(400).json({ 
+        error: 'Missing parameter',
+        message: 'tokenId is required'
+      });
+    }
+
+    // Check cache first
+    const { data: cachedPrice } = await getCachedData(`prices_${tokenId}`, CACHE_DURATION) || {};
 
     if (cachedPrice) {
       return res.json(cachedPrice.data);
@@ -294,10 +297,17 @@ app.get('/api/price', async (req, res) => {
 
     const data = await response.json();
 
-    // Fix price calculation
-    const totalSupply = Number(data.total_supply) / 1e18;
-    const marketcap = Number(data.marketcap); // In satoshis
-    const btcPrice = marketcap / 1e8 / totalSupply; // First convert marketcap to BTC, then divide by supply
+    if (!data) {
+      return res.status(404).json({
+        error: 'Token not found',
+        message: `No data found for token ID: ${tokenId}`
+      });
+    }
+
+    // Calculate price
+    const totalSupply = Number(data.total_supply || 0) / 1e18;
+    const marketcap = Number(data.marketcap || 0); // In satoshis
+    const btcPrice = totalSupply > 0 ? marketcap / 1e8 / totalSupply : 0; // First convert marketcap to BTC, then divide by supply
     
     const priceData = {
       btcPrice: btcPrice,
@@ -305,19 +315,17 @@ app.get('/api/price', async (req, res) => {
       usdPrice: btcPrice.toFixed(8)
     };
 
-    // Save to Supabase
-    const { error: upsertError } = await writeData(`prices_${tokenId}`, priceData, CACHE_DURATION);
-
-    if (upsertError) {
-      console.error('Supabase upsert error:', upsertError);
-    }
+    // Cache the data
+    await cacheData(`prices_${tokenId}`, priceData, CACHE_DURATION);
 
     console.log('Sending price data:', priceData);
     return res.json(priceData);
 
   } catch (error) {
     console.error('Price fetch error:', error);
-    return res.json({ 
+    return res.status(500).json({ 
+      error: 'Failed to fetch price data',
+      message: error.message,
       btcPrice: 0,
       tokenPrice: 0,
       usdPrice: "0.00000000"
