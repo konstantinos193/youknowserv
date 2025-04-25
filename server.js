@@ -194,7 +194,7 @@ app.get('/api/token/:tokenId', async (req, res) => {
   try {
     const { tokenId } = req.params;
     
-    // Check memory cache first (fastest)
+    // Check memory cache first
     const memoryCacheKey = `token_${tokenId}`;
     const memoryCached = memoryCache.get(memoryCacheKey);
     if (memoryCached && Date.now() - memoryCached.timestamp < CACHE_DURATION) {
@@ -205,7 +205,6 @@ app.get('/api/token/:tokenId', async (req, res) => {
     const cacheKey = `token_${tokenId}`;
     const cachedData = await getCachedData(cacheKey);
     if (cachedData) {
-      // Update memory cache
       memoryCache.set(memoryCacheKey, {
         data: cachedData.data,
         timestamp: Date.now()
@@ -213,62 +212,55 @@ app.get('/api/token/:tokenId', async (req, res) => {
       return res.json(cachedData.data);
     }
 
-    // Fetch only essential token data
-    const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
-      headers: {
-        'accept': '*/*',
-        'origin': 'https://tools.humanz.fun',
-        'user-agent': getRandomUserAgent()
-      },
-      timeout: 5000 // 5 second timeout
-    });
+    // Fetch token data and holders in parallel
+    const [tokenResponse, holdersResponse] = await Promise.all([
+      fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
+        headers: {
+          ...API_HEADERS,
+          'User-Agent': getRandomUserAgent()
+        }
+      }),
+      fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`, {
+        headers: {
+          ...API_HEADERS,
+          'User-Agent': getRandomUserAgent()
+        }
+      })
+    ]);
 
-    if (!response.ok) {
-      throw new Error(`Token not found: ${response.status}`);
+    if (!tokenResponse.ok) {
+      throw new Error(`Token not found: ${tokenResponse.status}`);
     }
 
-    const tokenData = await response.json();
+    const [tokenData, holdersData] = await Promise.all([
+      tokenResponse.json(),
+      holdersResponse.ok ? holdersResponse.json() : { data: [] }
+    ]);
+
+    // Process holders data
+    const holders = (holdersData.data || [])
+      .map(holder => ({
+        user: holder.user,
+        user_username: holder.user_username || holder.user.substring(0, 8),
+        balance: holder.balance,
+        percentage: ((Number(holder.balance) / Number(tokenData.total_supply)) * 100).toFixed(2)
+      }))
+      .sort((a, b) => Number(b.balance) - Number(a.balance));
+
+    const enrichedData = {
+      ...tokenData,
+      holders,
+      holder_count: holders.length
+    };
 
     // Update both caches
     memoryCache.set(memoryCacheKey, {
-      data: tokenData,
+      data: enrichedData,
       timestamp: Date.now()
     });
-    await cacheData(cacheKey, tokenData);
+    await cacheData(cacheKey, enrichedData);
 
-    res.json(tokenData);
-
-    // Background fetch with limited concurrency
-    if (memoryCache.size < MEMORY_CACHE_SIZE) {
-      setTimeout(async () => {
-        try {
-          const [holdersData, tradesData] = await Promise.all([
-            fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=50`, {
-              headers: { 'user-agent': getRandomUserAgent() },
-              timeout: 5000
-            }).then(r => r.json()),
-            fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=50`, {
-              headers: { 'user-agent': getRandomUserAgent() },
-              timeout: 5000
-            }).then(r => r.json())
-          ]);
-
-          const enrichedData = {
-            ...tokenData,
-            holders: holdersData?.data?.slice(0, 50) || [],
-            trades: tradesData?.data?.slice(0, 50) || []
-          };
-
-          memoryCache.set(memoryCacheKey, {
-            data: enrichedData,
-            timestamp: Date.now()
-          });
-          await cacheData(cacheKey, enrichedData);
-        } catch (bgError) {
-          console.error('Background fetch error:', bgError);
-        }
-      }, 100); // Small delay for background fetch
-    }
+    res.json(enrichedData);
 
   } catch (error) {
     console.error('Token fetch error:', error);
