@@ -230,18 +230,15 @@ app.get('/api/token/:tokenId', async (req, res) => {
       throw new Error(`Token not found: ${tokenResponse.status}`);
     }
 
-    const [tokenResult, btcPriceData] = await Promise.all([
+    const [tokenData, btcPriceData] = await Promise.all([
       tokenResponse.json(),
       btcPriceResponse.ok ? btcPriceResponse.json() : { USD: 30000 }
     ]);
 
-    console.log('Token API Response:', tokenResult);
+    console.log('Token API Response:', tokenData);
 
-    // Extract data from the response
-    const tokenData = tokenResult.data;
-    
     if (!tokenData || typeof tokenData !== 'object') {
-      throw new Error(`Invalid token data received: ${JSON.stringify(tokenResult)}`);
+      throw new Error(`Invalid token data received: ${JSON.stringify(tokenData)}`);
     }
 
     // Calculate volume in BTC and USD
