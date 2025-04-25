@@ -201,19 +201,8 @@ app.get('/api/token/:tokenId', async (req, res) => {
       return res.json(memoryCached.data);
     }
 
-    // Then check disk cache
-    const cacheKey = `token_${tokenId}`;
-    const cachedData = await getCachedData(cacheKey);
-    if (cachedData) {
-      memoryCache.set(memoryCacheKey, {
-        data: cachedData.data,
-        timestamp: Date.now()
-      });
-      return res.json(cachedData.data);
-    }
-
-    // Fetch token data and holders in parallel
-    const [tokenResponse, holdersResponse] = await Promise.all([
+    // Fetch token data, holders, and trades in parallel
+    const [tokenResponse, holdersResponse, tradesResponse, btcPriceResponse] = await Promise.all([
       fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
         headers: {
           ...API_HEADERS,
@@ -225,16 +214,25 @@ app.get('/api/token/:tokenId', async (req, res) => {
           ...API_HEADERS,
           'User-Agent': getRandomUserAgent()
         }
-      })
+      }),
+      fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=100`, {
+        headers: {
+          ...API_HEADERS,
+          'User-Agent': getRandomUserAgent()
+        }
+      }),
+      fetch('https://mempool.space/api/v1/prices')
     ]);
 
     if (!tokenResponse.ok) {
       throw new Error(`Token not found: ${tokenResponse.status}`);
     }
 
-    const [tokenData, holdersData] = await Promise.all([
+    const [tokenData, holdersData, tradesData, btcPriceData] = await Promise.all([
       tokenResponse.json(),
-      holdersResponse.ok ? holdersResponse.json() : { data: [] }
+      holdersResponse.ok ? holdersResponse.json() : { data: [] },
+      tradesResponse.ok ? tradesResponse.json() : { data: [] },
+      btcPriceResponse.ok ? btcPriceResponse.json() : { USD: 30000 }
     ]);
 
     // Process holders data
@@ -247,10 +245,22 @@ app.get('/api/token/:tokenId', async (req, res) => {
       }))
       .sort((a, b) => Number(b.balance) - Number(a.balance));
 
+    // Calculate volume metrics
+    const now = new Date();
+    const last24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+    
+    const trades24h = (tradesData.data || []).filter(tx => new Date(tx.time) > last24h);
+    const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+    const volumeUSD = volume24h * btcPriceData.USD;
+
     const enrichedData = {
       ...tokenData,
       holders,
-      holder_count: holders.length
+      holder_count: holders.length,
+      volume24h,
+      volumeUSD,
+      trades24h: trades24h.length,
+      btcPrice: btcPriceData.USD
     };
 
     // Update both caches
