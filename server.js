@@ -175,8 +175,7 @@ app.get('/api/token/:tokenId', async (req, res) => {
       return res.json(cachedData.data);
     }
 
-    // Fetch token data from Odin API
-    console.log(`Fetching from Odin API: https://api.odin.fun/v1/token/${tokenId}`);
+    // Fetch only essential token data first
     const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
       headers: {
         'authority': 'api.odin.fun',
@@ -184,17 +183,9 @@ app.get('/api/token/:tokenId', async (req, res) => {
         'accept-language': 'en-US,en;q=0.9',
         'origin': 'https://tools.humanz.fun',
         'referer': 'https://tools.humanz.fun/',
-        'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'cross-site',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        'user-agent': getRandomUserAgent()
       }
     });
-
-    console.log('Odin API response status:', response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -205,31 +196,46 @@ app.get('/api/token/:tokenId', async (req, res) => {
       });
       return res.status(response.status).json({
         error: 'Token not found',
-        message: `No data found for token ID: ${tokenId}`,
-        details: errorText
-      });
-    }
-
-    const tokenData = await response.json();
-    console.log('Token data received:', tokenData);
-
-    if (!tokenData) {
-      return res.status(404).json({
-        error: 'Token not found',
         message: `No data found for token ID: ${tokenId}`
       });
     }
 
-    // Cache the response
+    const tokenData = await response.json();
+
+    // Cache the response immediately
     await cacheData(cacheKey, tokenData);
 
+    // Send the response
     res.json(tokenData);
+
+    // Fetch additional data in the background for next request
+    try {
+      const [holdersData, tradesData] = await Promise.all([
+        fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`, {
+          headers: { ...API_HEADERS, 'user-agent': getRandomUserAgent() }
+        }).then(r => r.json()),
+        fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=100`, {
+          headers: { ...API_HEADERS, 'user-agent': getRandomUserAgent() }
+        }).then(r => r.json())
+      ]);
+
+      const enrichedData = {
+        ...tokenData,
+        holders: holdersData.data || [],
+        trades: tradesData.data || []
+      };
+
+      // Update cache with enriched data
+      await cacheData(cacheKey, enrichedData);
+    } catch (bgError) {
+      console.error('Background data fetch error:', bgError);
+    }
+
   } catch (error) {
     console.error('Token fetch error:', error);
     res.status(500).json({
       error: 'Failed to fetch token data',
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: error.message
     });
   }
 });
