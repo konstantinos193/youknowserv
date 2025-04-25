@@ -193,14 +193,31 @@ const fetchWithHeaders = async (url, retryCount = 0, maxRetries = 5) => {
 app.get('/api/token/:tokenId', async (req, res) => {
   try {
     const { tokenId } = req.params;
+    console.log(`Fetching token data for ${tokenId}`);
     
-    // Check memory cache first
+    // Define cache keys at the start
     const memoryCacheKey = `token_${tokenId}`;
+    const cacheKey = `token_${tokenId}`;
+
+    // Check memory cache first
     const memoryCached = memoryCache.get(memoryCacheKey);
     if (memoryCached && Date.now() - memoryCached.timestamp < CACHE_DURATION) {
+      console.log('Returning from memory cache');
       return res.json(memoryCached.data);
     }
 
+    // Then check disk cache
+    const cachedData = await getCachedData(cacheKey);
+    if (cachedData) {
+      console.log('Returning from disk cache');
+      memoryCache.set(memoryCacheKey, {
+        data: cachedData,
+        timestamp: Date.now()
+      });
+      return res.json(cachedData);
+    }
+
+    console.log('Fetching fresh data from API');
     // Fetch token data, holders, and trades in parallel
     const [tokenResponse, holdersResponse, tradesResponse, btcPriceResponse] = await Promise.all([
       fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
@@ -245,19 +262,30 @@ app.get('/api/token/:tokenId', async (req, res) => {
       }))
       .sort((a, b) => Number(b.balance) - Number(a.balance));
 
-    // Calculate volume metrics
+    // Calculate volume metrics with proper scaling
     const now = new Date();
     const last24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
     
     const trades24h = (tradesData.data || []).filter(tx => new Date(tx.time) > last24h);
-    const volume24h = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
-    const volumeUSD = volume24h * btcPriceData.USD;
+    
+    // Calculate volume in BTC (amount_btc is in satoshis, convert to BTC)
+    const volume24hBTC = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
+    
+    // Convert BTC volume to USD
+    const volumeUSD = volume24hBTC * btcPriceData.USD;
+
+    console.log('Volume calculation:', {
+      trades24hCount: trades24h.length,
+      volume24hBTC,
+      btcPrice: btcPriceData.USD,
+      volumeUSD
+    });
 
     const enrichedData = {
       ...tokenData,
       holders,
       holder_count: holders.length,
-      volume24h,
+      volume24hBTC,
       volumeUSD,
       trades24h: trades24h.length,
       btcPrice: btcPriceData.USD
@@ -270,6 +298,7 @@ app.get('/api/token/:tokenId', async (req, res) => {
     });
     await cacheData(cacheKey, enrichedData);
 
+    console.log('Successfully processed and cached token data');
     res.json(enrichedData);
 
   } catch (error) {
