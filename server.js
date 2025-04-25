@@ -57,22 +57,25 @@ setInterval(() => {
 // Apply rate limiting to all routes
 app.use(limiter);
 
-// Enable CORS with proper configuration
+// Update CORS configuration
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   console.log('Incoming request origin:', origin);
 
-  // Allow any localhost port during development
-  if (origin && (
-    origin.startsWith('http://localhost:') || 
-    origin.startsWith('https://localhost:') ||
-    origin === 'https://tools.humanz.fun' ||
-    origin === 'https://odinscan.fun'
-  )) {
+  // Allow any localhost port during development and specific domains
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://tools.humanz.fun',
+    'https://odinscan.fun',
+    'http://157.180.36.186:3001'
+  ];
+
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, Accept, Accept-Language, Origin, Referer');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
   }
 
@@ -218,6 +221,11 @@ app.get('/api/token/:tokenId', async (req, res) => {
       fetch('https://mempool.space/api/v1/prices')
     ]);
 
+    console.log('API Response Status:', {
+      token: tokenResponse.status,
+      btcPrice: btcPriceResponse.status
+    });
+
     if (!tokenResponse.ok) {
       throw new Error(`Token not found: ${tokenResponse.status}`);
     }
@@ -227,12 +235,13 @@ app.get('/api/token/:tokenId', async (req, res) => {
       btcPriceResponse.ok ? btcPriceResponse.json() : { USD: 30000 }
     ]);
 
+    console.log('Token API Response:', tokenResult);
+
     // Extract data from the response
     const tokenData = tokenResult.data;
-    console.log('Raw token data:', tokenData);
-
+    
     if (!tokenData || typeof tokenData !== 'object') {
-      throw new Error('Invalid token data received');
+      throw new Error(`Invalid token data received: ${JSON.stringify(tokenResult)}`);
     }
 
     // Calculate volume in BTC and USD
