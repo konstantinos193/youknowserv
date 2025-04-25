@@ -163,122 +163,73 @@ const fetchWithHeaders = async (url, retryCount = 0, maxRetries = 5) => {
 // Token data endpoint
 app.get('/api/token/:tokenId', async (req, res) => {
   try {
-    // Set CORS headers explicitly for this endpoint
-    res.header('Access-Control-Allow-Origin', 'https://odinscan.fun');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key');
-
     const { tokenId } = req.params;
     console.log(`Fetching token data for: ${tokenId}`);
-    
-    // Check memory cache first
-    const memoryCacheKey = `token_${tokenId}`;
-    const memoryCachedData = memoryCache.get(memoryCacheKey);
-    if (memoryCachedData && Date.now() - memoryCachedData.timestamp < MEMORY_CACHE_DURATION) {
-      console.log('Returning memory cached token data');
-      return res.json(memoryCachedData.data);
-    }
 
-    // Check disk cache
+    // Check cache first
     const cacheKey = `token_${tokenId}`;
-    const { data: cachedData } = await getCachedData(cacheKey, CACHE_DURATION) || {};
-    
+    const cachedData = await getCachedData(cacheKey);
+
     if (cachedData) {
-      // Update memory cache
-      memoryCache.set(memoryCacheKey, {
-        data: cachedData,
-        timestamp: Date.now()
-      });
-      console.log('Returning disk cached token data');
-      return res.json(cachedData);
+      console.log('Returning cached token data');
+      return res.json(cachedData.data);
     }
 
-    // First get the token data
-    const tokenData = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}`);
-    
+    // Fetch token data from Odin API
+    console.log(`Fetching from Odin API: https://api.odin.fun/v1/token/${tokenId}`);
+    const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
+      headers: {
+        'authority': 'api.odin.fun',
+        'accept': '*/*',
+        'accept-language': 'en-US,en;q=0.9',
+        'origin': 'https://tools.humanz.fun',
+        'referer': 'https://tools.humanz.fun/',
+        'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'cross-site',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+      }
+    });
+
+    console.log('Odin API response status:', response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Odin API error:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText
+      });
+      return res.status(response.status).json({
+        error: 'Token not found',
+        message: `No data found for token ID: ${tokenId}`,
+        details: errorText
+      });
+    }
+
+    const tokenData = await response.json();
+    console.log('Token data received:', tokenData);
+
     if (!tokenData) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: 'Token not found',
         message: `No data found for token ID: ${tokenId}`
       });
     }
 
-    // Calculate timestamp for 24h ago
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    // Cache the response
+    await cacheData(cacheKey, tokenData);
 
-    // Then fetch all other data in parallel
-    const [tradesData, btcPriceData, holdersData, creatorTokensResponse] = await Promise.all([
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=9999&after=${twentyFourHoursAgo}`),
-      fetch('https://mempool.space/api/v1/prices').then(res => res.json()),
-      fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`),
-      fetchWithHeaders(`https://api.odin.fun/v1/user/${tokenData.creator}/created`)
-    ]);
-
-    // Get actual holder count from holders data
-    const activeHolders = holdersData?.data?.filter(h => Number(h.balance) > 0) || [];
-    const actualHolderCount = activeHolders.length;
-    console.log(`Found ${actualHolderCount} active holders out of ${holdersData?.data?.length || 0} total holders`);
-
-    // Get creator's other tokens
-    const creatorTokens = creatorTokensResponse?.data || [];
-    const otherTokens = creatorTokens.filter(t => t.id !== tokenId);
-    const hasMultipleTokens = creatorTokens.length > 1;
-    console.log(`Creator has created ${creatorTokens.length} tokens`);
-
-    // Calculate volume metrics only if we have trades
-    let volumeMetrics = {
-      volume24h: 0,
-      averageDailyVolume: 0,
-      tradeCount24h: 0,
-      buyVolume24h: 0,
-      sellVolume24h: 0,
-      buySellRatio: 0,
-      spikeRatio: 0,
-      volumeChange: "0.00"
-    };
-
-    if (tradesData?.data?.length > 0) {
-      volumeMetrics = calculateVolumeMetrics(tradesData.data, btcPriceData.USD);
-    }
-
-    // Add all metrics to token data
-    const enrichedTokenData = {
-      ...tokenData,
-      holder_count: actualHolderCount,
-      volumeMetrics,
-      isRugged: actualHolderCount === 0,
-      creatorRisk: {
-        hasMultipleTokens,
-        tokenCount: creatorTokens.length,
-        otherTokens: otherTokens.map(t => ({
-          id: t.id,
-          name: t.name,
-          ticker: t.ticker
-        }))
-      }
-    };
-
-    // Update both caches
-    await cacheData(cacheKey, enrichedTokenData, CACHE_DURATION);
-    memoryCache.set(memoryCacheKey, {
-      data: enrichedTokenData,
-      timestamp: Date.now()
-    });
-
-    console.log('Sending fresh token data:', {
-      holder_count: actualHolderCount,
-      isRugged: actualHolderCount === 0,
-      volume24h: volumeMetrics.volume24h,
-      creatorTokenCount: creatorTokens.length
-    });
-    
-    res.json(enrichedTokenData);
+    res.json(tokenData);
   } catch (error) {
     console.error('Token fetch error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch token data',
-      message: error.message 
+      message: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
