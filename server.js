@@ -898,11 +898,11 @@ const calculateVolumeMetrics = (trades, btcUsdPrice) => {
 
   // Calculate buy and sell volumes in BTC
   const buyVolume24h = trades24h
-    .filter(tx => tx.buy)
+    .filter(tx => tx.action === "BUY")
     .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
   
   const sellVolume24h = trades24h
-    .filter(tx => !tx.buy)
+    .filter(tx => tx.action === "SELL")
     .reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
 
   // Calculate buy/sell ratio (avoid division by zero)
@@ -921,20 +921,11 @@ const calculateVolumeMetrics = (trades, btcUsdPrice) => {
     ? ((volume24h - averageDailyVolume) / averageDailyVolume * 100).toFixed(2)
     : '0.00';
 
-  // Calculate USD values with correct scaling (divide by 1e3)
-  const volume24hUSD = (volume24h * btcUsdPrice) / 1e3;
-  const averageDailyVolumeUSD = (averageDailyVolume * btcUsdPrice) / 1e3;
-  const buyVolumeUSD = (buyVolume24h * btcUsdPrice) / 1e3;
-  const sellVolumeUSD = (sellVolume24h * btcUsdPrice) / 1e3;
-
-  console.log('Volume metrics:', {
-    volume24h,
-    volume24hUSD,
-    averageDailyVolume,
-    averageDailyVolumeUSD,
-    buyVolumeUSD,
-    sellVolumeUSD
-  });
+  // Calculate USD values
+  const volume24hUSD = volume24h * btcUsdPrice;
+  const averageDailyVolumeUSD = averageDailyVolume * btcUsdPrice;
+  const buyVolumeUSD = buyVolume24h * btcUsdPrice;
+  const sellVolumeUSD = sellVolume24h * btcUsdPrice;
 
   return {
     volume24h,
