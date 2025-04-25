@@ -37,15 +37,23 @@ const MEMORY_CACHE_DURATION = 60000; // 1 minute
 
 // Enable CORS with proper configuration
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://tools.humanz.fun'],
+  origin: function(origin, callback) {
+    const allowedOrigins = ['http://localhost:3000', 'https://tools.humanz.fun', 'https://odinscan.fun'];
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept', 'Accept-Language', 'Origin', 'Referer'],
   exposedHeaders: ['Content-Length', 'Content-Type'],
-  maxAge: 86400 // Cache preflight requests for 24 hours
+  maxAge: 86400
 }));
 
-// Handle preflight requests for all routes
+// Add CORS preflight handling
 app.options('*', cors());
 
 // Add this middleware to log all requests
