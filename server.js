@@ -297,40 +297,80 @@ app.get('/api/token/:tokenId', async (req, res) => {
   }
 });
 
-// Add this endpoint for token holders with proper error handling
+// Update the token owners endpoint
 app.get('/api/token/:tokenId/owners', async (req, res) => {
   try {
     const { tokenId } = req.params;
-    const PAGE_SIZE = 100;
+    const { page = 1, limit = 100 } = req.query;
+
+    console.log(`Fetching holders for token ${tokenId}, page ${page}, limit ${limit}`);
 
     // Check cache first
-    const cacheKey = `holders_${tokenId}_all`;
-    const { data: cachedData } = await getCachedData('holders', cacheKey, CACHE_DURATION) || {};
+    const cacheKey = `holders_${tokenId}_${page}_${limit}`;
+    const cachedData = await getCachedData(cacheKey, CACHE_DURATION);
 
     if (cachedData) {
+      console.log('Returning cached holders data');
       return res.json(cachedData);
     }
 
-    // Fetch from Odin API
-    const response = await fetchWithHeaders(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=${PAGE_SIZE}`);
-    
-    if (!response) {
-      return res.status(404).json({ 
-        error: 'No holders found',
-        message: `No holder data found for token ID: ${tokenId}`
-      });
+    // Fetch from Odin API with pagination
+    const response = await fetch(
+      `https://api.odin.fun/v1/token/${tokenId}/owners?page=${page}&limit=${limit}`,
+      {
+        headers: {
+          ...API_HEADERS,
+          'User-Agent': getRandomUserAgent(),
+        }
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch holders: ${response.status}`);
     }
 
-    // Cache the response
-    await cacheData('holders', cacheKey, { data: response.data || [] }, CACHE_DURATION);
+    const data = await response.json();
+    
+    // Process holders data to include percentages
+    if (data.data && Array.isArray(data.data)) {
+      // Get total supply from token info for percentage calculation
+      const tokenResponse = await fetch(
+        `https://api.odin.fun/v1/token/${tokenId}`,
+        {
+          headers: {
+            ...API_HEADERS,
+            'User-Agent': getRandomUserAgent(),
+          }
+        }
+      );
+      
+      const tokenData = await tokenResponse.json();
+      const totalSupply = tokenData.total_supply || "0";
 
-    res.json({ data: response.data || [] });
+      // Calculate percentages and format balances
+      data.data = data.data.map(holder => ({
+        user: holder.user,
+        user_username: holder.user_username || holder.user.substring(0, 8),
+        balance: holder.balance.toString(),
+        percentage: ((Number(holder.balance) / Number(totalSupply)) * 100).toFixed(2) + "%"
+      }));
+    }
+
+    // Cache the processed data
+    await cacheData(cacheKey, data, CACHE_DURATION);
+
+    console.log(`Returning ${data.data?.length || 0} holders`);
+    res.json(data);
+
   } catch (error) {
     console.error('Token owners fetch error:', error);
     res.status(500).json({ 
       error: 'Failed to fetch token holders',
       message: error.message,
-      data: [] 
+      data: [],
+      page: 1,
+      limit: 100,
+      count: 0
     });
   }
 });
