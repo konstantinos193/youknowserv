@@ -1,5 +1,3 @@
-process.noDeprecation = true;
-
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -10,6 +8,7 @@ import { readData, writeData, deleteData } from './localStorage.js';
 import { cacheData, getCachedData, deleteCachedData } from './cache.js';
 import fs from 'fs/promises';
 import path from 'path';
+import compression from 'compression';
 
 // Initialize environment variables
 dotenv.config();
@@ -30,7 +29,6 @@ const port = process.env.PORT || 3001;
 // ... other requires and code ...
 
 // Add compression middleware at the top of the file
-import compression from 'compression';
 app.use(compression());
 
 // Add memory cache for frequently accessed tokens
@@ -39,7 +37,7 @@ const MEMORY_CACHE_DURATION = 60000; // 1 minute
 
 // Enable CORS with proper configuration
 app.use(cors({
-  origin: true, // Allow all origins during development
+  origin: ['http://localhost:3000', 'https://tools.humanz.fun'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'Accept', 'Accept-Language', 'Origin', 'Referer'],
