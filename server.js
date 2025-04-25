@@ -9,6 +9,7 @@ import { cacheData, getCachedData, deleteCachedData } from './cache.js';
 import fs from 'fs/promises';
 import path from 'path';
 import compression from 'compression';
+import rateLimit from 'express-rate-limit';
 
 // Initialize environment variables
 dotenv.config();
@@ -27,6 +28,34 @@ const TRUSTED_DEVELOPERS = [
 const app = express();
 const port = process.env.PORT || 3001;
 // ... other requires and code ...
+
+// Add rate limiting configuration
+const limiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 30, // limit each IP to 30 requests per minute
+  message: { error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Memory management
+const MEMORY_CACHE_SIZE = 100; // Maximum number of items in memory cache
+const MEMORY_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+// Clean up memory cache periodically
+setInterval(() => {
+  if (memoryCache.size > MEMORY_CACHE_SIZE) {
+    const entriesToDelete = Array.from(memoryCache.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp)
+      .slice(0, Math.floor(MEMORY_CACHE_SIZE * 0.2)); // Remove oldest 20%
+    
+    entriesToDelete.forEach(([key]) => memoryCache.delete(key));
+    console.log(`Cleaned up ${entriesToDelete.length} items from memory cache`);
+  }
+}, MEMORY_CACHE_CLEANUP_INTERVAL);
+
+// Apply rate limiting to all routes
+app.use(limiter);
 
 // Enable CORS with proper configuration
 app.use((req, res, next) => {
@@ -164,76 +193,86 @@ const fetchWithHeaders = async (url, retryCount = 0, maxRetries = 5) => {
 app.get('/api/token/:tokenId', async (req, res) => {
   try {
     const { tokenId } = req.params;
-    console.log(`Fetching token data for: ${tokenId}`);
+    
+    // Check memory cache first (fastest)
+    const memoryCacheKey = `token_${tokenId}`;
+    const memoryCached = memoryCache.get(memoryCacheKey);
+    if (memoryCached && Date.now() - memoryCached.timestamp < CACHE_DURATION) {
+      return res.json(memoryCached.data);
+    }
 
-    // Check cache first
+    // Then check disk cache
     const cacheKey = `token_${tokenId}`;
     const cachedData = await getCachedData(cacheKey);
-
     if (cachedData) {
-      console.log('Returning cached token data');
+      // Update memory cache
+      memoryCache.set(memoryCacheKey, {
+        data: cachedData.data,
+        timestamp: Date.now()
+      });
       return res.json(cachedData.data);
     }
 
-    // Fetch only essential token data first
+    // Fetch only essential token data
     const response = await fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
       headers: {
-        'authority': 'api.odin.fun',
         'accept': '*/*',
-        'accept-language': 'en-US,en;q=0.9',
         'origin': 'https://tools.humanz.fun',
-        'referer': 'https://tools.humanz.fun/',
         'user-agent': getRandomUserAgent()
-      }
+      },
+      timeout: 5000 // 5 second timeout
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Odin API error:', {
-        status: response.status,
-        statusText: response.statusText,
-        body: errorText
-      });
-      return res.status(response.status).json({
-        error: 'Token not found',
-        message: `No data found for token ID: ${tokenId}`
-      });
+      throw new Error(`Token not found: ${response.status}`);
     }
 
     const tokenData = await response.json();
 
-    // Cache the response immediately
+    // Update both caches
+    memoryCache.set(memoryCacheKey, {
+      data: tokenData,
+      timestamp: Date.now()
+    });
     await cacheData(cacheKey, tokenData);
 
-    // Send the response
     res.json(tokenData);
 
-    // Fetch additional data in the background for next request
-    try {
-      const [holdersData, tradesData] = await Promise.all([
-        fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`, {
-          headers: { ...API_HEADERS, 'user-agent': getRandomUserAgent() }
-        }).then(r => r.json()),
-        fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=100`, {
-          headers: { ...API_HEADERS, 'user-agent': getRandomUserAgent() }
-        }).then(r => r.json())
-      ]);
+    // Background fetch with limited concurrency
+    if (memoryCache.size < MEMORY_CACHE_SIZE) {
+      setTimeout(async () => {
+        try {
+          const [holdersData, tradesData] = await Promise.all([
+            fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=50`, {
+              headers: { 'user-agent': getRandomUserAgent() },
+              timeout: 5000
+            }).then(r => r.json()),
+            fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=50`, {
+              headers: { 'user-agent': getRandomUserAgent() },
+              timeout: 5000
+            }).then(r => r.json())
+          ]);
 
-      const enrichedData = {
-        ...tokenData,
-        holders: holdersData.data || [],
-        trades: tradesData.data || []
-      };
+          const enrichedData = {
+            ...tokenData,
+            holders: holdersData?.data?.slice(0, 50) || [],
+            trades: tradesData?.data?.slice(0, 50) || []
+          };
 
-      // Update cache with enriched data
-      await cacheData(cacheKey, enrichedData);
-    } catch (bgError) {
-      console.error('Background data fetch error:', bgError);
+          memoryCache.set(memoryCacheKey, {
+            data: enrichedData,
+            timestamp: Date.now()
+          });
+          await cacheData(cacheKey, enrichedData);
+        } catch (bgError) {
+          console.error('Background fetch error:', bgError);
+        }
+      }, 100); // Small delay for background fetch
     }
 
   } catch (error) {
     console.error('Token fetch error:', error);
-    res.status(500).json({
+    res.status(error.message.includes('not found') ? 404 : 500).json({
       error: 'Failed to fetch token data',
       message: error.message
     });
@@ -2988,3 +3027,13 @@ app.get('/api/user/:userId/created', async (req, res) => {
 });
 
 // ... existing code ...
+
+// Add this near the top after imports
+const API_HEADERS = {
+  'authority': 'api.odin.fun',
+  'accept': '*/*',
+  'accept-language': 'en-US,en;q=0.9',
+  'origin': 'https://tools.humanz.fun',
+  'referer': 'https://tools.humanz.fun/',
+  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+};
