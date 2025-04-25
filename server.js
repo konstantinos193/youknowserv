@@ -206,33 +206,10 @@ app.get('/api/token/:tokenId', async (req, res) => {
       return res.json(memoryCached.data);
     }
 
-    // Then check disk cache
-    const cachedData = await getCachedData(cacheKey);
-    if (cachedData) {
-      console.log('Returning from disk cache');
-      memoryCache.set(memoryCacheKey, {
-        data: cachedData,
-        timestamp: Date.now()
-      });
-      return res.json(cachedData);
-    }
-
     console.log('Fetching fresh data from API');
-    // Fetch token data, holders, and trades in parallel
-    const [tokenResponse, holdersResponse, tradesResponse, btcPriceResponse] = await Promise.all([
+    // Fetch token data and BTC price in parallel
+    const [tokenResponse, btcPriceResponse] = await Promise.all([
       fetch(`https://api.odin.fun/v1/token/${tokenId}`, {
-        headers: {
-          ...API_HEADERS,
-          'User-Agent': getRandomUserAgent()
-        }
-      }),
-      fetch(`https://api.odin.fun/v1/token/${tokenId}/owners?page=1&limit=100`, {
-        headers: {
-          ...API_HEADERS,
-          'User-Agent': getRandomUserAgent()
-        }
-      }),
-      fetch(`https://api.odin.fun/v1/token/${tokenId}/trades?page=1&limit=100`, {
         headers: {
           ...API_HEADERS,
           'User-Agent': getRandomUserAgent()
@@ -245,15 +222,25 @@ app.get('/api/token/:tokenId', async (req, res) => {
       throw new Error(`Token not found: ${tokenResponse.status}`);
     }
 
-    const [tokenData, holdersData, tradesData, btcPriceData] = await Promise.all([
+    const [tokenResult, btcPriceData] = await Promise.all([
       tokenResponse.json(),
-      holdersResponse.ok ? holdersResponse.json() : { data: [] },
-      tradesResponse.ok ? tradesResponse.json() : { data: [] },
       btcPriceResponse.ok ? btcPriceResponse.json() : { USD: 30000 }
     ]);
 
+    // Extract data from the response
+    const tokenData = tokenResult.data;
+    console.log('Raw token data:', tokenData);
+
+    if (!tokenData || typeof tokenData !== 'object') {
+      throw new Error('Invalid token data received');
+    }
+
+    // Calculate volume in BTC and USD
+    const volume24hBTC = Number(tokenData.volume) / 1e8; // Convert satoshis to BTC
+    const volumeUSD = volume24hBTC * btcPriceData.USD;
+
     // Process holders data
-    const holders = (holdersData.data || [])
+    const holders = (tokenData.holders || [])
       .map(holder => ({
         user: holder.user,
         user_username: holder.user_username || holder.user.substring(0, 8),
@@ -262,32 +249,18 @@ app.get('/api/token/:tokenId', async (req, res) => {
       }))
       .sort((a, b) => Number(b.balance) - Number(a.balance));
 
-    // Calculate volume metrics with proper scaling
+    // Calculate 24h trades count
     const now = new Date();
     const last24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-    
-    const trades24h = (tradesData.data || []).filter(tx => new Date(tx.time) > last24h);
-    
-    // Calculate volume in BTC (amount_btc is in satoshis, convert to BTC)
-    const volume24hBTC = trades24h.reduce((sum, tx) => sum + (Number(tx.amount_btc) / 1e8), 0);
-    
-    // Convert BTC volume to USD
-    const volumeUSD = volume24hBTC * btcPriceData.USD;
-
-    console.log('Volume calculation:', {
-      trades24hCount: trades24h.length,
-      volume24hBTC,
-      btcPrice: btcPriceData.USD,
-      volumeUSD
-    });
+    const trades24h = (tokenData.trades || []).filter(tx => new Date(tx.time) > last24h).length;
 
     const enrichedData = {
       ...tokenData,
       holders,
-      holder_count: holders.length,
+      holder_count: tokenData.holder_count || holders.length,
       volume24hBTC,
       volumeUSD,
-      trades24h: trades24h.length,
+      trades24h,
       btcPrice: btcPriceData.USD
     };
 
@@ -298,14 +271,22 @@ app.get('/api/token/:tokenId', async (req, res) => {
     });
     await cacheData(cacheKey, enrichedData);
 
-    console.log('Successfully processed and cached token data');
+    console.log('Successfully processed token data:', {
+      price: enrichedData.price,
+      volume24hBTC,
+      volumeUSD,
+      holder_count: enrichedData.holder_count,
+      trades24h
+    });
+
     res.json(enrichedData);
 
   } catch (error) {
     console.error('Token fetch error:', error);
     res.status(error.message.includes('not found') ? 404 : 500).json({
       error: 'Failed to fetch token data',
-      message: error.message
+      message: error.message,
+      details: error.stack
     });
   }
 });
