@@ -1,15 +1,15 @@
-const express = require('express'); // or import express from 'express';
-const cors = require('cors');
-const dotenv = require('dotenv');
-const { fileURLToPath } = require('url');
-const { dirname } = require('path');
-const fetch = require('node-fetch');
-const { readData, writeData, deleteData } = require('./localStorage.js');
-const { cacheData, getCachedData, deleteCachedData } = require('./cache.js');
-const fs = require('fs/promises');
-const path = require('path');
-const compression = require('compression');
-const rateLimit = require('express-rate-limit');
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import fetch from 'node-fetch';
+import { readData, writeData, deleteData } from './localStorage.js';
+import { cacheData, getCachedData, deleteCachedData } from './cache.js';
+import fs from 'fs/promises';
+import path from 'path';
+import compression from 'compression';
+import rateLimit from 'express-rate-limit';
 
 // Initialize environment variables
 dotenv.config();
